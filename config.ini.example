@@ -1,0 +1,38 @@
+
+[DATABASE]
+ssh_server =
+ssh_user =
+ssh_pass = 
+
+mysql_host = 
+mysql_user =
+mysql_db = 
+mysql_pass = 
+
+omop_schema = 
+cohort_schema = 
+
+vocabulary_table = 'vocabulary'
+
+
+[MODEL FILES]
+drug_eras_file = 'drug_eras.csv'
+
+[EMBEDDING FILES]
+embeddings_dir = 'trained_embeddings'
+node_embeddings_file = 'node_embeddings.npy'
+rel_embeddings_file = 'rel_embeddings.npy'
+lambda_file = 'lambda.json'
+model_weights_file = 'saved_model_weights.pt'
+
+[MODEL PARAMETERS]
+max_sequence_length = 150
+
+[MODEL FILES]
+model_dir = 'adverse_event_prediction_model'
+model_binary_dir = 'saved_model'
+calibrated_model_file = 'calibrated_model.pkl'
+uncalibrated_model_file = 'uncalibrated_model.pkl'
+
+
+

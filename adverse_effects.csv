@@ -1,0 +1,57 @@
+adverse_effect_name,concept_id
+Nausea,35708202
+Infection,36110552
+Hypertension,37622529
+Headache,36718132
+Rash,37320212
+Pyrexia,35809054
+Diarrhoea,35708093
+Arthralgia,36516812
+Back pain,36516951
+Hypersensitivity,36009711
+Oedema peripheral,35205236
+Depression,36918942
+Chills,35809082
+Cough,37219907
+Thrombocytopenia,35104691
+Asthenia,35809072
+Anaemia,35104074
+Seizure,36776613
+Pruritus,37320197
+Dyspnoea,35205038
+Myalgia,36516837
+Vomiting,35708208
+Lymphopenia,35104871
+Aspartate aminotransferase increased,36313534
+Urticaria,36009783
+Upper respiratory tract infection,36110715
+Tachycardia,35204948
+Herpes zoster,36110918
+Fatigue,35809076
+Liver injury,35909503
+Dizziness,35205025
+Sinusitis,36110708
+Abdominal pain,35708154
+Alanine aminotransferase increased,36313524
+Influenza,36110933
+Anaphylactic reaction,36009756
+Pneumonia,36110597
+Pain in extremity,36516959
+Bronchitis,36110584
+Nasopharyngitis,36110697
+Leukopenia,35104868
+Dyspepsia,35708139
+Anxiety,36918858
+Pain,35809243
+Alopecia,37320268
+Neutropenia,35104883
+Progressive multifocal leukoencephalopathy,36110978
+Sepsis,36110642
+Haemolytic anaemia,35104281
+Chest pain,35205185
+Urinary tract infection,36110736
+Blood pressure increased,36312077
+Hyperhidrosis,35809134
+Insomnia,36718555
+Rhinitis,36110704
+Injection site reaction,35809014
