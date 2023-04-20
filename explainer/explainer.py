@@ -1,28 +1,12 @@
 # Python imports
-import collections
 import os
-from pathlib import Path
-import logging
-import warnings
-import dill as pickle
 from datetime import timedelta
 import configparser
 
 # Third-party imports
 import pandas as pd
-from kglime_explainer import KGLIMEExplainer, TableDomainMapper
+from .kglime_explainer import KGLIMEExplainer, TableDomainMapper
 import numpy as np
-import networkx as nx
-from pyvis.network import Network
-from msticpy.vis.timeline import display_timeline
-from bokeh.plotting import output_file, save
-from bs4 import BeautifulSoup
-from jinja2 import Environment, BaseLoader
-from tqdm import tqdm
-from sklearn.metrics import label_ranking_average_precision_score, top_k_accuracy_score
-from torchmetrics.functional import retrieval_hit_rate
-import torch
-import sklearn
 
 # Package imports
 from risk_score_model.sequencer import build_padded_sequences, condense_sequences
@@ -30,7 +14,7 @@ from risk_score_model.sequencer import build_padded_sequences, condense_sequence
 CONFIG = configparser.ConfigParser()
 CONFIG.read('config.ini')
 
-MAXLEN = CONFIG['MODEL PARAMETERS']['max_sequence_length']
+MAXLEN = int(CONFIG['MODEL PARAMETERS']['max_sequence_length'])
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['BOKEH_PY_LOG_LEVEL'] = 'WARNING'
@@ -95,17 +79,16 @@ def kglime_explain(patient_sequence,
 
     class_names = ['No AE', 'AE']
 
-    explainer = KGLIMEExplainer(
-        CONFIG['MODEL PARAMETERS']['max_sequence_length'],
-        2,
-        mode="classification",
-        feature_names=["concept_id"],
-        categorical_features=[0],
-        categorical_names=categorical_names,
-        class_names=class_names,
-        feature_selection='auto',
-        feature_neighbor_fns=feature_neighbor_fns,
-        n_features=2)
+    explainer = KGLIMEExplainer(int(
+        CONFIG['MODEL PARAMETERS']['max_sequence_length']),
+                                2,
+                                mode="classification",
+                                feature_names=["concept_id"],
+                                categorical_features=[0],
+                                categorical_names=categorical_names,
+                                class_names=class_names,
+                                feature_selection='auto',
+                                feature_neighbor_fns=feature_neighbor_fns)
 
     TableDomainMapper.map_exp_ids = TableDomainMapper._map_exp_ids_with_features
     exp = explainer.explain_instance(
@@ -120,6 +103,8 @@ def kglime_explain(patient_sequence,
     TableDomainMapper.map_exp_ids = TableDomainMapper._map_exp_ids
 
     # Parse explanations
+    print(patient_sequence.shape)
+
     feat_indexes = [
         feat[0] for feat in exp.as_map()[0]
         if patient_sequence[feat[0]][0] != 0
@@ -170,15 +155,19 @@ def kglime_explain(patient_sequence,
 def explain_patient_sequence(ade_joint_model, patient_sequence_df,
                              knowledge_graph, embedding_distances_matrix):
     condensed_sequence = condense_sequences(patient_sequence_df)
-    patient_sequence = build_padded_sequences(condensed_sequence)
-    index_date = patient_sequence_df['concept_id'].max()
+    patient_sequence, patient_sequence_dates = build_padded_sequences(
+        condensed_sequence, maxlen=MAXLEN, include_dates=True)
+    patient_sequence = np.stack([patient_sequence, patient_sequence_dates],
+                                axis=-1)[0]
+
+    index_date = patient_sequence_df['concept_date'].max()
 
     ade_models = ade_joint_model.layers[1:-1]
-
+    print(np.array(patient_sequence).shape)
     explanations = {}
     for ade_model in ade_models:
         adverse_effect_name = ade_model.name
-        ade_pred = ade_model(patient_sequence)
+        ade_pred = ade_model(np.expand_dims(patient_sequence, 0)).numpy()[0][0]
         explanation_df = kglime_explain(patient_sequence, ade_model,
                                         knowledge_graph,
                                         embedding_distances_matrix, index_date)

@@ -9,27 +9,19 @@ import configparser
 import numpy as np
 from numpy.random import seed
 from sklearn.model_selection import train_test_split
-from sklearn.calibration import calibration_curve
-from sklearn.preprocessing import RobustScaler
-import sklearn
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras.layers import Concatenate
-import matplotlib.pyplot as plt
-import tensorflow_addons as tfa
-import tensorflow.keras.backend as K
-from scikeras.wrappers import KerasClassifier
-import dill as pickle
 import pandas as pd
 import networkx as nx
 
 # Package imports
-from layers import RobustScalerLayer
+from .layers import RobustScalerLayer
 from cohort import get_adverse_event_labels, get_concept_sequences_with_drug_era_ids
-from calibration import build_calibrated_model, build_joint_calibrated_model
-from loss import BinaryFocalLoss
-from sequencer import build_padded_sequences, condense_sequences
-from evaluation import evalute_calibrated_model
+from .calibration import build_calibrated_model, build_joint_calibrated_model
+from .loss import BinaryFocalLoss
+from .sequencer import build_padded_sequences, condense_sequences
+from .evaluation import evalute_calibrated_model
 
 #Make keras pickalable
 from tensorflow.keras.models import Model
@@ -39,7 +31,7 @@ from tensorflow.python.keras.saving import saving_utils
 CONFIG = configparser.ConfigParser()
 CONFIG.read('config.ini')
 
-MAXLEN = CONFIG['MODEL PARAMETERS']['max_sequence_length']
+MAXLEN = int(CONFIG['MODEL PARAMETERS']['max_sequence_length'])
 
 seed(1)
 logging.basicConfig(level=logging.INFO)
@@ -70,7 +62,6 @@ def make_keras_picklable():
 
 make_keras_picklable()
 
-COLORS = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
 
 class ReturnBestEarlyStopping(keras.callbacks.EarlyStopping):
@@ -183,8 +174,9 @@ def train_adverse_event_model(adverse_effect_concepts,
     data_path = Path(output_folder) / 'data.csv'
     labels_path = Path(output_folder) / 'labels.csv'
 
-    adverse_effect_concept_ids = list(adverse_effect_concepts.keys())
-    adverse_effect_concept_names = list(adverse_effect_concepts.values())
+    adverse_effect_concept_ids = list(adverse_effect_concepts['concept_id'])
+    adverse_effect_concept_names = list(
+        adverse_effect_concepts['adverse_effect_name'])
 
     if use_data_cache and data_path.exists():
         logging.info(f"Loading cached data from {Path(data_path)}")
@@ -314,7 +306,8 @@ def train_adverse_event_model(adverse_effect_concepts,
         calibrated_model = build_calibrated_model(model,
                                                   x_test,
                                                   y_test[:, i],
-                                                  name=ae_name)
+                                                  name=ae_name.replace(
+                                                      " ", "_"))
 
         uncalibrated_models.append(model)
         calibrated_models.append(calibrated_model)
@@ -331,15 +324,20 @@ def train_adverse_event_model(adverse_effect_concepts,
         f"Saving model to {Path(saved_model_path) / CONFIG['MODEL FILES']['calibrated_model_file']}"
     )
 
-    with open(
-            Path(saved_model_path) /
-            CONFIG['MODEL FILES']['calibrated_model_file'], 'wb') as f:
-        pickle.dump(joint_calibrated_model, f)
+    # with open(
+    #         Path(saved_model_path) /
+    #         CONFIG['MODEL FILES']['calibrated_model_file'], 'wb') as f:
+    #     pickle.dump(joint_calibrated_model, f)
 
-    with open(
-            Path(saved_model_path) /
-            CONFIG['MODEL FILES']['uncalibrated_model_file'], 'wb') as f:
-        pickle.dump(joint_uncalibrated_model, f)
+    # with open(
+    #         Path(saved_model_path) /
+    #         CONFIG['MODEL FILES']['uncalibrated_model_file'], 'wb') as f:
+    #     pickle.dump(joint_uncalibrated_model, f)
+
+    joint_calibrated_model.save(saved_model_path /
+                                CONFIG['MODEL FILES']['calibrated_model_file'])
+    joint_uncalibrated_model.save(
+        saved_model_path / CONFIG['MODEL FILES']['uncalibrated_model_file'])
 
     # Evaluate model
     evalute_calibrated_model(joint_calibrated_model, joint_uncalibrated_model,

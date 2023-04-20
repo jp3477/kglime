@@ -10,7 +10,7 @@ import dgl.function as fn
 from dgl.nn.functional import edge_softmax
 
 # Package imports
-from hake import HAKE
+from .hake import HAKE
 
 
 class RGCNModel(nn.Module):

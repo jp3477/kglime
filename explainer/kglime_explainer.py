@@ -469,6 +469,10 @@ class LimeVectorizedExplainer(object):
 
         self.feature_neighbor_fns = feature_neighbor_fns
 
+    @staticmethod
+    def convert_and_round(values):
+        return ['%.2f' % v for v in values]
+
     def explain_instance(self,
                          data_row,
                          predict_fn,
@@ -476,7 +480,6 @@ class LimeVectorizedExplainer(object):
                          top_labels=None,
                          num_features=10,
                          num_samples=5000,
-                         distance_metric='euclidean',
                          model_regressor=None):
 
         data_row_interpretable, data_row_remaining = np.split(data_row,
@@ -498,7 +501,6 @@ class LimeVectorizedExplainer(object):
                                       top_labels=top_labels,
                                       num_features=num_features,
                                       num_samples=num_samples,
-                                      distance_metric=distance_metric,
                                       model_regressor=model_regressor)
 
     def _explain_instance(self,
@@ -608,11 +610,9 @@ class LimeVectorizedExplainer(object):
         values = self.convert_and_round(data_row)
         feature_indexes = None
 
-        data_row_stacked = np.reshape(
-            full_data_row, (2, len(self.original_categorical_features)))
+        data_row_stacked = np.reshape(full_data_row,
+                                      (2, len(self.categorical_features)))
         for i in self.categorical_features:
-            if self.discretizer is not None and i in self.discretizer.lambdas:
-                continue
             name = int(data_row_stacked[0][i])
             name = self.categorical_names[name]
             days_elapsed = int(data_row_stacked[1][i])
@@ -698,11 +698,11 @@ class LimeVectorizedExplainer(object):
         inverse = data.copy()
         all_dists = np.zeros((num_samples, num_cols))
 
-        for column in self.original_categorical_features:
+        for column in self.categorical_features:
             if data_row[column] in [0]:
                 inverse_column = np.repeat(data_row[column], num_samples)
             else:
-                if column in self.original_categorical_features and self.feature_neighbor_fns:
+                if column in self.categorical_features and self.feature_neighbor_fns:
                     values, dists, freqs = self.feature_neighbor_fns(
                         data_row[column])
 
@@ -723,6 +723,7 @@ class LimeVectorizedExplainer(object):
                                                           p=freqs).astype(int)
 
                 inverse_column = np.array(values)[sample_indices]
+                dists = dists[sample_indices]
 
             binary_column = (inverse_column == first_row[column]).astype(int)
             binary_column[0] = 1
@@ -737,9 +738,8 @@ class LimeVectorizedExplainer(object):
             else:
                 all_dists[:, column] = 0.0
 
-        if self.discretizer is not None:
-            inverse[1:] = self.discretizer.undiscretize(inverse[1:])
         inverse[0] = data_row
+
         return data, inverse, all_dists
 
 
@@ -832,16 +832,15 @@ class KGLIMEExplainer(LimeVectorizedExplainer):
                 cat_feat_idx += 1
 
         # Send off the the super class to do its magic.
-        super(KGLIMEExplainer, self).__init__(
-            mode=mode,
-            feature_names=feature_names,
-            categorical_features=multiplied_categorical_features,
-            categorical_names=categorical_names,
-            verbose=verbose,
-            class_names=class_names,
-            feature_selection=feature_selection,
-            random_state=random_state,
-            feature_neighbor_fns=feature_neighbor_fns)
+        super().__init__(mode=mode,
+                         feature_names=feature_names,
+                         categorical_features=multiplied_categorical_features,
+                         categorical_names=categorical_names,
+                         verbose=verbose,
+                         class_names=class_names,
+                         feature_selection=feature_selection,
+                         random_state=random_state,
+                         feature_neighbor_fns=feature_neighbor_fns)
 
     def _make_predict_proba(self, func):
         """
@@ -866,7 +865,6 @@ class KGLIMEExplainer(LimeVectorizedExplainer):
                          top_labels=None,
                          num_features=10,
                          num_samples=5000,
-                         distance_metric='euclidean',
                          model_regressor=None):
         """Generates explanations for a prediction.
 
@@ -903,12 +901,10 @@ class KGLIMEExplainer(LimeVectorizedExplainer):
 
         # Wrap the classifier to reshape input
         classifier_fn = self._make_predict_proba(classifier_fn)
-        return super(KGLIMEExplainer,
-                     self).explain_instance(data_row,
-                                            classifier_fn,
-                                            labels=labels,
-                                            top_labels=top_labels,
-                                            num_features=num_features,
-                                            num_samples=num_samples,
-                                            distance_metric=distance_metric,
-                                            model_regressor=model_regressor)
+        return super().explain_instance(data_row,
+                                        classifier_fn,
+                                        labels=labels,
+                                        top_labels=top_labels,
+                                        num_features=num_features,
+                                        num_samples=num_samples,
+                                        model_regressor=model_regressor)

@@ -20,7 +20,7 @@ import networkx as nx
 from sklearn.model_selection import train_test_split
 
 # Package imports
-from gcn import RGCNModel
+from .gcn import RGCNModel
 
 RANDOM_SEED = 1
 

@@ -37,11 +37,11 @@ def connect_to_server():
 
     if USE_SSH_TUNNEL:
         engine = create_engine(
-            f"mysql+pymysql://{CONFIG['DATABASE']['my_sql_user']}:{CONFIG['DATABASE']['my_sql_pass']}@{CONFIG['DATABASE']['my_sql_host']}:{server.local_bind_port}/{CONFIG['DATABASE']['my_sql_db']}",
+            f"mysql+pymysql://{CONFIG['DATABASE']['mysql_user']}:{CONFIG['DATABASE']['mysql_pass']}@{CONFIG['DATABASE']['mysql_host']}:{server.local_bind_port}/{CONFIG['DATABASE']['mysql_db']}",
             connect_args={"client_flag": CLIENT.MULTI_STATEMENTS})
     else:
         engine = create_engine(
-            f"mysql+pymysql://{CONFIG['DATABASE']['my_sql_user']}:{CONFIG['DATABASE']['my_sql_pass']}@{CONFIG['DATABASE']['my_sql_host']}/{CONFIG['DATABASE']['my_sql_db']}",
+            f"mysql+pymysql://{CONFIG['DATABASE']['mysql_user']}:{CONFIG['DATABASE']['mysql_pass']}@{CONFIG['DATABASE']['mysql_host']}/{CONFIG['DATABASE']['mysql_db']}",
             connect_args={"client_flag": CLIENT.MULTI_STATEMENTS})
 
     connection = engine.connect()
@@ -162,13 +162,13 @@ FROM (
 			AND cs.concept_date <= de.drug_era_start_date
 	JOIN {cohort_schema}.vocabulary v
 		ON v.concept_id = cs.concept_id
+    {optional_where_clause}
     ORDER BY de.drug_era_id, concept_date DESC, event_id ASC
 
     ) base_rows CROSS JOIN (SELECT @rank := NULL, @partval := NULL, @rankval1 := NULL, @rankval2 := NULL) R
 
 ) a
 WHERE CONVERT(rank, SIGNED) <151
-{optional_where_clause}
 ORDER BY drug_era_id, CONVERT(rank, SIGNED) ASC;
 
 """
@@ -290,7 +290,7 @@ def get_concept_sequences_with_drug_era_ids(drug_era_id=None):
     concept_sequences_with_drug_eras_query = CONCEPT_SEQUENCES_WITH_DRUG_ERAS_QUERY.format(
         omop_schema=OMOP_SCHEMA,
         cohort_schema=COHORT_SCHEMA,
-        optional_where_clause=f'AND drug_era_id={drug_era_id}'
+        optional_where_clause=f'WHERE drug_era_id={drug_era_id}'
         if drug_era_id else '')
 
     concept_sequences_with_drug_eras = pd.read_sql_query(

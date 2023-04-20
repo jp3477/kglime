@@ -1,11 +1,15 @@
 # Python imports
+import logging
+from pathlib import Path
 
 # Third-party imports
-
+import matplotlib.pyplot as plt
+from sklearn.calibration import calibration_curve
+import sklearn
 
 # Package imports
 
-
+COLORS = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
 
 def evalute_calibrated_model(calibrated_model, base_model, x_train, y_train,
