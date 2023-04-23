@@ -37,7 +37,6 @@ JOINT_ADE_MODEL_PATH = PROJECT_PATH / 'run_output/adverse_event_prediction_model
 KNOWLEDGE_GRAPH_PATH = PROJECT_PATH / 'run_output/knowledge_graph.pkl'
 EMBEDDINGS_DISTANCES_PATH = PROJECT_PATH / 'run_output/adverse_event_prediction_model/sparse_dist_info.pkl'
 
-app.logger.info("Loading risk score models")
 RISK_SCORE_MODELS = {}
 
 
@@ -129,14 +128,8 @@ def load_model(d):
 
 # JOINT_ADE_MODEL = keras.models.load_model(JOINT_ADE_MODEL_PATH)
 
-app.logger.info("Loading knowledge graph")
-print("Loading knowledge graph")
-KNOWLEDGE_GRAPH = nx.read_gpickle(KNOWLEDGE_GRAPH_PATH)
-
-app.logger.info("Loading embedding distances")
-print("Loading embedding distances")
-with open(EMBEDDINGS_DISTANCES_PATH, 'rb') as f:
-    EMBEDDINGS_DISTANCES = pickle.load(f)
+KNOWLEDGE_GRAPH = {}
+EMBEDDINGS_DISTANCES = {}
 
 
 def round_float(data):
@@ -211,13 +204,21 @@ def get_explanation(drug_era_id, ae_name):
 
 
 if __name__ == '__main__':
+    app.logger.info("Loading risk score models")
     print("Diving into multiprocessing")
     model_dirs = [
-        p for p in list(Path(JOINT_ADE_MODEL_PATH).iterdir()) if p.is_dir() and
-        p.stem in ['Nausea', 'Infection', 'Hypertension', 'Headache', 'Rash']
+        p for p in list(Path(JOINT_ADE_MODEL_PATH).iterdir()) if p.is_dir()
+        # and p.stem in [
+        #     'Nausea', 'Infection', 'Hypertension', 'Headache', 'Rash',
+        #     'Pyrexia', 'Diarrhoea', 'Arthralgia', 'Back pain',
+        #     'Hypersensitivity', 'Oedema peripheral', 'Depression', 'Chills',
+        #     'Cough', 'Thrombocytopenia', 'Asthenia', 'Anaemia', 'Seizure',
+        #     'Pruritus', 'Dyspnoea', 'Myalgia', 'Vomiting', 'Lymphopenia',
+        #     'Upper respiratory tract infection', 'Tachycardia'
+        # ]
     ]
 
-    pool = multiprocessing.Pool(processes=20)
+    pool = multiprocessing.Pool(processes=18)
 
     with keras.utils.custom_object_scope({
             'RobustScalerLayer': RobustScalerLayer,
@@ -230,4 +231,14 @@ if __name__ == '__main__':
     }):
         risk_models_list = pool.map(load_model, model_dirs)
     RISK_SCORE_MODELS = dict(risk_models_list)
-    app.run(debug=True)
+
+    app.logger.info("Loading knowledge graph")
+    print("Loading knowledge graph")
+    KNOWLEDGE_GRAPH = nx.read_gpickle(KNOWLEDGE_GRAPH_PATH)
+
+    app.logger.info("Loading embedding distances")
+    print("Loading embedding distances")
+    with open(EMBEDDINGS_DISTANCES_PATH, 'rb') as f:
+        EMBEDDINGS_DISTANCES = pickle.load(f)
+
+    app.run(debug=False)

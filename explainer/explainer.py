@@ -36,8 +36,8 @@ def kglime_explain(patient_sequence,
                    num_features=10):
     if domain_relation_map is None:
         domain_relation_map = {
-            'Condition': 'norel',
-            'Drug': 'norel',
+            'Condition': 'inv_has_ae',
+            'Drug': 'has_ae',
             'Measurement': 'norel'
         }
 
@@ -234,8 +234,10 @@ def predict_risk_scores(ade_models, patient_sequence_df):
     ade_preds = []
     for _, ade_model in ade_models.items():
         ade_pred = round(
-            np.squeeze(ade_model.predict(np.expand_dims(patient_sequence,
-                                                        0))).item(), 2)
+            # np.squeeze(ade_model.predict(np.expand_dims(patient_sequence,
+            #                                             0))).item(), 2)
+            np.squeeze(ade_model(np.expand_dims(patient_sequence, 0))).item(),
+            2)
         ade_preds.append(ade_pred)
 
     ade_preds_zipped = dict(zip(adverse_effect_names, ade_preds))

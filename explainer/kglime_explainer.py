@@ -25,6 +25,9 @@ from sklearn.linear_model import Ridge, lars_path
 from sklearn.utils import check_random_state
 from sklearn.tree import DecisionTreeRegressor
 
+from sklearn.model_selection import train_test_split
+from sklearn.inspection import permutation_importance
+
 
 class CustomLimeBase(object):
     """Class for learning a locally linear sparse model from perturbed data"""
@@ -211,6 +214,15 @@ class CustomLimeBase(object):
         used_features = self.feature_selection(neighborhood_data,
                                                labels_column, weights,
                                                num_features, feature_selection)
+
+        used_neighborhood_data = neighborhood_data[:, used_features]
+
+        x_train, x_val, y_train, y_val, sample_weights_train, sample_weights_val = train_test_split(
+            used_neighborhood_data,
+            labels_column,
+            weights,
+            random_state=self.random_state)
+
         if model_regressor is None:
             model_regressor = Ridge(alpha=1,
                                     fit_intercept=True,
@@ -218,9 +230,16 @@ class CustomLimeBase(object):
 
         model_regressor = DecisionTreeRegressor()
         easy_model = model_regressor
-        easy_model.fit(neighborhood_data[:, used_features],
-                       labels_column,
-                       sample_weight=weights)
+
+        easy_model.fit(x_train, y_train, sample_weight=sample_weights_train)
+
+        r = permutation_importance(easy_model,
+                                   x_val,
+                                   y_val,
+                                   sample_weight=sample_weights_val,
+                                   n_repeats=30,
+                                   random_state=self.random_state)
+
         prediction_score = easy_model.score(neighborhood_data[:,
                                                               used_features],
                                             labels_column,
@@ -238,7 +257,7 @@ class CustomLimeBase(object):
         #     print('Right:', neighborhood_labels[0, label])
         easy_model.intercept_ = 0.0
         return (easy_model.intercept_,
-                sorted(zip(used_features, easy_model.feature_importances_),
+                sorted(zip(used_features, r.importances_mean),
                        key=lambda x: np.abs(x[1]),
                        reverse=True), prediction_score, local_pred)
 
