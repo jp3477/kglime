@@ -2,10 +2,14 @@
 
 # Third-party imports
 import tensorflow as tf
+from tensorflow import keras
 import tensorflow_lattice as tfl
 import numpy as np
 
 # Package imports
+
+# tfl.layers.PWLCalibration = keras.utils.register_keras_serializable(
+#     'adverse_event_prediction')(tfl.layers.PWLCalibration)
 
 
 def build_calibrated_model(base_model, x_calib, y_calib, name=None):
@@ -23,7 +27,8 @@ def build_calibrated_model(base_model, x_calib, y_calib, name=None):
         monotonicity='increasing')(output_layer)
 
     calibrated_model = tf.keras.models.Model(inputs=inputs,
-                                             outputs=calibrator_layer, name=name)
+                                             outputs=calibrator_layer,
+                                             name=name)
 
     LEARNING_RATE = 0.1
     BATCH_SIZE = 128
@@ -41,21 +46,36 @@ def build_calibrated_model(base_model, x_calib, y_calib, name=None):
     return calibrated_model
 
 
+# def build_joint_calibrated_model(calibrated_models):
+
+#     inputs = tf.keras.Input(shape=(None, 2), dtype=tf.int32)
+
+#     combined_models = []
+#     for calibrated_model in calibrated_models:
+#         calibrated_model.trainable = False
+#         combined_models.append(calibrated_model(inputs, training=False))
+
+#     combined_models = tf.keras.layers.Concatenate(axis=-1)(combined_models)
+
+#     joint_calibrated_model = tf.keras.models.Model(inputs=inputs,
+#                                                    outputs=combined_models)
+
+#     calibrated_model.compile(loss=tf.keras.losses.mean_squared_error,
+#                              optimizer=tf.keras.optimizers.Adam(0.01))
+
+#     return joint_calibrated_model
+
+
 def build_joint_calibrated_model(calibrated_models):
+    inputs = tf.keras.Input(shape=(None, 2))
 
-    inputs = tf.keras.Input(shape=(None, 2), dtype=tf.int32)
-
-    combined_models = []
-    for calibrated_model in calibrated_models:
-        calibrated_model.trainable = False
-        combined_models.append(calibrated_model(inputs, training=False))
-
-    combined_models = tf.keras.layers.Concatenate(axis=-1)(combined_models)
+    outputs = [model(inputs) for model in calibrated_models]
+    combined_outputs = tf.keras.layers.Concatenate(-1)(outputs)
 
     joint_calibrated_model = tf.keras.models.Model(inputs=inputs,
-                                                   outputs=combined_models)
+                                                   outputs=combined_outputs)
 
-    calibrated_model.compile(loss=tf.keras.losses.mean_squared_error,
-                             optimizer=tf.keras.optimizers.Adam(0.01))
+    joint_calibrated_model.compile(loss=tf.keras.losses.mean_squared_error,
+                                   optimizer=tf.keras.optimizers.Adam(0.01))
 
     return joint_calibrated_model

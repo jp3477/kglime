@@ -4,7 +4,6 @@
 import tensorflow as tf
 from tensorflow import keras
 import tensorflow_addons as tfa
-import numpy as np
 
 # Package imports
 
@@ -26,7 +25,7 @@ class BinaryFocalLoss(keras.losses.Loss):
         fl = tfa.losses.SigmoidFocalCrossEntropy(alpha=self.alpha,
                                                  gamma=self.gamma,
                                                  reduction=self.reduction)
-        sample_weight = np.expand_dims(np.ones_like(y_true), -1)
-        sample_weight[:, 1:] = 1
+        sample_weight = tf.expand_dims(tf.ones_like(y_true), -1)
+        # sample_weight[:, 1:] = 1
         focal_loss = fl(y_true, y_pred, sample_weight=sample_weight)
         return focal_loss

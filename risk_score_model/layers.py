@@ -3,12 +3,11 @@
 # Third-party imports
 from tensorflow import keras
 import tensorflow as tf
-from sklearn.preprocessing import RobustScaler
 
 # Package imports
 
 
-@keras.utils.register_keras_serializable('adverse_event_prediction')
+# @keras.utils.register_keras_serializable('adverse_event_prediction')
 class RobustScalerLayer(keras.layers.Layer):
     def __init__(self, robust_scaler_center, robust_scaler_scale, **kwargs):
         super().__init__(**kwargs)
@@ -32,4 +31,22 @@ class RobustScalerLayer(keras.layers.Layer):
             "robust_scaler_center": self.robust_scaler_center,
             "robust_scaler_scale": self.robust_scaler_scale
         })
+        return config
+
+
+# @keras.utils.register_keras_serializable('adverse_event_prediction')
+class SliceLayer(keras.layers.Layer):
+    def __init__(self, indices, **kwargs):
+        super(SliceLayer, self).__init__(**kwargs)
+        self.indices = indices
+
+    def call(self, inputs):
+        return tf.gather(inputs, self.indices, axis=-1)
+
+    # def compute_output_shape(self, input_shape):
+    #     return input_shape[:-1] + (len(self.indices), )
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"indices": self.indices})
         return config

@@ -1,25 +1,24 @@
 # Python imports
 import logging
 from pathlib import Path
+import argparse
 
 # Third-party imports
 import matplotlib.pyplot as plt
 from sklearn.calibration import calibration_curve
 import sklearn
+import numpy as np
 
 # Package imports
 
 COLORS = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
 
-def evalute_calibrated_model(calibrated_model, base_model, x_train, y_train,
-                             x_test, y_test, ae_names, output_dir):
+def evalute_calibrated_model(calibrated_models, uncalibrated_models, x_train,
+                             train_labels, x_test, test_labels, ae_names,
+                             output_dir):
 
     logging.info(f'Predicting calibrated and uncalibrated for train and test')
-    calibrated_train_predictions = calibrated_model.predict(x_train)
-    calibrated_test_predictions = calibrated_model.predict(x_test)
-    uncalibrated_train_predictions = base_model.predict(x_train)
-    uncalibrated_test_predictions = base_model.predict(x_test)
 
     def evaluate_submodel(model_idx):
 
@@ -29,24 +28,31 @@ def evalute_calibrated_model(calibrated_model, base_model, x_train, y_train,
         ae_eval_path = Path(output_dir) / ae_name
         ae_eval_path.mkdir(exist_ok=True)
 
-        logging.info(f'Evaluating {ae_name} model and generating figures')
-        submodel_calibrated_train_predictions = calibrated_train_predictions[:,
-                                                                             model_idx]
-        submodel_calibrated_test_predictions = calibrated_test_predictions[:,
-                                                                           model_idx]
+        calibrated_model = calibrated_models[model_idx]
+        uncalibrated_model = uncalibrated_models[model_idx]
 
-        submodel_uncalibrated_train_predictions = uncalibrated_train_predictions[:,
-                                                                                 model_idx]
-        submodel_uncalibrated_test_predictions = uncalibrated_test_predictions[:,
-                                                                               model_idx]
+        calibrated_train_predictions = calibrated_model.predict(x_train)
+        calibrated_test_predictions = calibrated_model.predict(x_test)
+        uncalibrated_train_predictions = uncalibrated_model.predict(x_train)
+        uncalibrated_test_predictions = uncalibrated_model.predict(x_test)
+
+        y_train = np.array(train_labels[f'hasDx_{ae_name}'].values)
+        y_test = np.array(test_labels[f'hasDx_{ae_name}'].values)
+
+        logging.info(f'Evaluating {ae_name} model and generating figures')
+        submodel_calibrated_train_predictions = calibrated_train_predictions
+        submodel_calibrated_test_predictions = calibrated_test_predictions
+
+        submodel_uncalibrated_train_predictions = uncalibrated_train_predictions
+        submodel_uncalibrated_test_predictions = uncalibrated_test_predictions
 
         # Plot roc curves
         plot_roc("Train",
-                 y_train[:, model_idx],
+                 y_train,
                  submodel_calibrated_train_predictions,
                  color=COLORS[0])
         plot_roc("Test",
-                 y_test[:, model_idx],
+                 y_test,
                  submodel_calibrated_test_predictions,
                  color=COLORS[1],
                  linestyle='--')
@@ -60,25 +66,25 @@ def evalute_calibrated_model(calibrated_model, base_model, x_train, y_train,
 
         n_bins = 10
         x_cal_train, y_cal_train = calibration_curve(
-            y_train[:, model_idx],
+            y_train,
             submodel_calibrated_train_predictions,
             n_bins=n_bins,
             strategy='quantile')
 
         x_cal_test, y_cal_test = calibration_curve(
-            y_test[:, model_idx],
+            y_test,
             submodel_calibrated_test_predictions,
             n_bins=n_bins,
             strategy='quantile')
 
         x_uncal_train, y_uncal_train = calibration_curve(
-            y_train[:, model_idx],
+            y_train,
             submodel_uncalibrated_train_predictions,
             n_bins=n_bins,
             strategy='quantile')
 
         x_uncal_test, y_uncal_test = calibration_curve(
-            y_test[:, model_idx],
+            y_test,
             submodel_uncalibrated_test_predictions,
             n_bins=n_bins,
             strategy='quantile')
@@ -111,11 +117,11 @@ def evalute_calibrated_model(calibrated_model, base_model, x_train, y_train,
         plt.clf()
 
         plot_prc("Train",
-                 y_train[:, model_idx],
+                 y_train,
                  submodel_calibrated_train_predictions,
                  color=COLORS[0])
         plot_prc("Test",
-                 y_test[:, model_idx],
+                 y_test,
                  submodel_calibrated_test_predictions,
                  color=COLORS[1],
                  linestyle='--')
@@ -127,7 +133,7 @@ def evalute_calibrated_model(calibrated_model, base_model, x_train, y_train,
         logging.info('Done.')
 
     # Loop through each output
-    for i in range(y_train.shape[1]):
+    for i in range(len(calibrated_models)):
         evaluate_submodel(i)
 
 
@@ -168,3 +174,9 @@ def plot_calibration_curve(name, x_cal, y_cal, fmt=None):
     # plt.ylabel('Ratio of positives')
     #     plt.xlim(0, 0.2)
     #     plt.ylim(0, 0.2)
+
+
+# if __name__ == "__main__":
+#     parser = argparse.ArgumentParser(description="Evaluate models")
+#     parser.add_argument("output_dir", "-o", help="Directory containing python output")
+#     parser.add_argument("")

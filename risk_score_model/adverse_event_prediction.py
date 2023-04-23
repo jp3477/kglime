@@ -12,16 +12,19 @@ from sklearn.model_selection import train_test_split
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras.layers import Concatenate
+from tensorflow.keras.initializers import Constant
 import pandas as pd
 import networkx as nx
+import dill as pickle
 
 # Package imports
-from .layers import RobustScalerLayer
+from .layers import RobustScalerLayer, SliceLayer
 from cohort import get_adverse_event_labels, get_concept_sequences_with_drug_era_ids
 from .calibration import build_calibrated_model, build_joint_calibrated_model
 from .loss import BinaryFocalLoss
 from .sequencer import build_padded_sequences, condense_sequences
 from .evaluation import evalute_calibrated_model
+from utils import CONFIG_PATH
 
 #Make keras pickalable
 from tensorflow.keras.models import Model
@@ -29,7 +32,7 @@ from tensorflow.python.keras.layers import deserialize, serialize
 from tensorflow.python.keras.saving import saving_utils
 
 CONFIG = configparser.ConfigParser()
-CONFIG.read('config.ini')
+CONFIG.read(CONFIG_PATH)
 
 MAXLEN = int(CONFIG['MODEL PARAMETERS']['max_sequence_length'])
 
@@ -61,7 +64,6 @@ def make_keras_picklable():
 
 
 make_keras_picklable()
-
 
 
 class ReturnBestEarlyStopping(keras.callbacks.EarlyStopping):
@@ -101,6 +103,8 @@ def build_model(pretrained_weights,
     vocab_size = len(vocab)
 
     inputs = keras.Input(shape=(None, 2), dtype=tf.int32)
+    # concept_ids = SliceLayer(0)(inputs)
+    # concept_date_ints = SliceLayer(1)(inputs)
     concept_ids = keras.layers.Lambda(lambda x: x[:, :, 0])(inputs)
     concept_date_ints = keras.layers.Lambda(lambda x: x[:, :, 1])(inputs)
     concept_date_ints = keras.layers.Flatten()(concept_date_ints)
@@ -116,7 +120,8 @@ def build_model(pretrained_weights,
     x = keras.layers.Embedding(
         input_dim=vocab_size + 2,
         output_dim=embedding_size,
-        weights=[pretrained_weights],
+        # weights=[pretrained_weights],
+        embeddings_initializer=Constant(pretrained_weights),
         mask_zero=True,
         trainable=False,
         # embeddings_regularizer=keras.regularizers.L2(1e-2)
@@ -127,36 +132,29 @@ def build_model(pretrained_weights,
 
     for i in range(depth):
         return_sequences = False if i == depth - 1 else True
-        x = keras.layers.LSTM(
-            lstm_units,
-            return_sequences=return_sequences,
-            # kernel_regularizer=keras.regularizers.L2(0.9),
-            # recurrent_regularizer=keras.regularizers.L2(1e-2),
-            dropout=0.3)(x)
+        x = keras.layers.Bidirectional(
+            keras.layers.LSTM(
+                lstm_units,
+                return_sequences=return_sequences,
+                # kernel_regularizer=keras.regularizers.L2(0.9),
+                # recurrent_regularizer=keras.regularizers.L2(1e-2),
+                dropout=0.6))(x)
 
     x = keras.layers.Dense(
         100,
         activation='relu',
     )(x)
     x = keras.layers.BatchNormalization()(x)
-    x = keras.layers.Dropout(0.3)(x)
+    x = keras.layers.Dropout(0.6)(x)
     x = keras.layers.Dense(100, activation='relu')(x)
     x = keras.layers.BatchNormalization()(x)
-    x = keras.layers.Dropout(0.3)(x)
+    x = keras.layers.Dropout(0.6)(x)
 
     x = keras.layers.Dense(1, activation='sigmoid')(x)
 
     model = keras.Model(inputs=inputs, outputs=x)
 
     return model
-
-
-def build_submodel(base_model, idx):
-    inputs = base_model.input
-    output_layer = base_model(inputs, training=False)
-    output_layer = keras.layers.Lambda(lambda x: x[:, idx])(output_layer)
-
-    return keras.models.Model(inputs=inputs, outputs=output_layer)
 
 
 def train_adverse_event_model(adverse_effect_concepts,
@@ -242,7 +240,7 @@ def train_adverse_event_model(adverse_effect_concepts,
                                                             training=True,
                                                             maxlen=MAXLEN,
                                                             padding_how='post')
-    train_labels = np.array(train_data.filter(regex='^hasDx', axis=1).values)
+    train_labels = train_data.filter(regex='^hasDx', axis=1)
 
     train_sequences, train_concept_dates = train_sequences
     train_sequences = np.array(train_sequences)
@@ -253,7 +251,7 @@ def train_adverse_event_model(adverse_effect_concepts,
                                             training=False,
                                             maxlen=MAXLEN,
                                             padding_how='post')
-    test_labels = np.array(test_data.filter(regex='^hasDx', axis=1).values)
+    test_labels = test_data.filter(regex='^hasDx', axis=1)
     test_sequences, test_concept_dates = test_sequences
 
     def create_model():
@@ -271,7 +269,7 @@ def train_adverse_event_model(adverse_effect_concepts,
             metrics=[
                 tf.keras.metrics.AUC(curve='PR', name='AUPRC'),
             ],
-            run_eagerly=True)
+            run_eagerly=False)
 
         return model
 
@@ -283,20 +281,20 @@ def train_adverse_event_model(adverse_effect_concepts,
                                              restore_best_weights=True)
 
     x_train = np.stack([train_sequences, train_concept_dates], axis=-1)
-    y_train = train_labels
     x_test = np.stack([test_sequences, test_concept_dates], axis=-1)
-    y_test = test_labels
 
     uncalibrated_models = []
     calibrated_models = []
-    for i in range(y_train.shape[1]):
-        ae_name = adverse_effect_concept_names[i]
+    for i, ae_name in enumerate(adverse_effect_concept_names):
         logging.info(f'Training {ae_name} model')
+
+        y_train = np.array(train_labels[f'hasDx_{ae_name}'].values)
+        y_test = np.array(test_labels[f'hasDx_{ae_name}'].values)
 
         model = create_model()
         model.fit(x_train,
-                  y_train[:, i],
-                  validation_data=(x_test, y_test[:, i]),
+                  y_train,
+                  validation_data=(x_test, y_test),
                   epochs=epochs,
                   batch_size=batch_size,
                   shuffle=True,
@@ -305,24 +303,33 @@ def train_adverse_event_model(adverse_effect_concepts,
         logging.info(f'Calibrating {ae_name} model')
         calibrated_model = build_calibrated_model(model,
                                                   x_test,
-                                                  y_test[:, i],
+                                                  y_test,
                                                   name=ae_name.replace(
                                                       " ", "_"))
+
+        # print(pickle.pickles(calibrated_model))
+        # print(calibrated_model.get_config())
+        # print(pickle.detect.badtypes(calibrated_model, depth=1))
+
+        saved_model_path = Path(output_folder) / ae_name
+        saved_model_path.mkdir(exist_ok=True)
+
+        logging.info(
+            f"Saving model to {Path(saved_model_path) / CONFIG['MODEL FILES']['calibrated_model_file']}"
+        )
+
+        calibrated_model.save(saved_model_path /
+                              CONFIG['MODEL FILES']['calibrated_model_file'])
+
+        model.save(saved_model_path /
+                   CONFIG['MODEL FILES']['uncalibrated_model_file'])
 
         uncalibrated_models.append(model)
         calibrated_models.append(calibrated_model)
 
-    joint_uncalibrated_model = build_joint_calibrated_model(
-        uncalibrated_models)
-    joint_calibrated_model = build_joint_calibrated_model(calibrated_models)
-
-    saved_model_path = Path(
-        output_folder) / CONFIG['MODEL FILES']['model_binary_dir']
-    saved_model_path.mkdir(exist_ok=True)
-
-    logging.info(
-        f"Saving model to {Path(saved_model_path) / CONFIG['MODEL FILES']['calibrated_model_file']}"
-    )
+    # joint_uncalibrated_model = build_joint_calibrated_model(
+    #     uncalibrated_models)
+    # joint_calibrated_model = build_joint_calibrated_model(calibrated_models)
 
     # with open(
     #         Path(saved_model_path) /
@@ -334,17 +341,17 @@ def train_adverse_event_model(adverse_effect_concepts,
     #         CONFIG['MODEL FILES']['uncalibrated_model_file'], 'wb') as f:
     #     pickle.dump(joint_uncalibrated_model, f)
 
-    joint_calibrated_model.save(saved_model_path /
-                                CONFIG['MODEL FILES']['calibrated_model_file'])
-    joint_uncalibrated_model.save(
-        saved_model_path / CONFIG['MODEL FILES']['uncalibrated_model_file'])
+    # joint_calibrated_model.save(saved_model_path /
+    #                             CONFIG['MODEL FILES']['calibrated_model_file'])
+    # joint_uncalibrated_model.save(
+    #     saved_model_path / CONFIG['MODEL FILES']['uncalibrated_model_file'])
 
     # Evaluate model
-    evalute_calibrated_model(joint_calibrated_model, joint_uncalibrated_model,
-                             x_train, y_train, x_test, y_test,
+    evalute_calibrated_model(calibrated_models, uncalibrated_models, x_train,
+                             train_labels, x_test, test_labels,
                              adverse_effect_concept_names, Path(output_folder))
 
-    return joint_calibrated_model
+    # return joint_calibrated_model
 
 
 def train_adverse_event_models(adverse_effect_concepts,

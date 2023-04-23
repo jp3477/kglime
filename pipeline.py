@@ -14,9 +14,10 @@ from knowledge_graph import create_knowledge_graph
 from cohort import (build_cohort, write_vocabulary_to_table)
 from graph_embeddings.train_graph_embeddings import train_graph_embeddings_mp
 from risk_score_model.adverse_event_prediction import train_adverse_event_models
+from utils import CONFIG_PATH
 
 CONFIG = configparser.ConfigParser()
-CONFIG.read('config.ini')
+CONFIG.read(CONFIG_PATH)
 
 MS_DMT_DRUGS_CSV = Path("ms_dmt_drugs.csv")
 ADVERSE_EFFECTS_CSV = Path("adverse_effects.csv")
@@ -90,15 +91,15 @@ Train adverse event prediction model
         'node_embeddings_file']
     ae_prediction_model_path = Path(
         OUTPUT_DIR) / CONFIG['MODEL FILES']['model_dir']
-    model = train_adverse_event_models(ae_concepts,
-                                       knowledge_graph_path,
-                                       ae_prediction_model_path,
-                                       node_embeddings_path,
-                                       epochs=100,
-                                       batch_size=256,
-                                       learning_rate=0.001,
-                                       patience=20,
-                                       use_data_cache=True)
+    train_adverse_event_models(ae_concepts,
+                               knowledge_graph_path,
+                               ae_prediction_model_path,
+                               node_embeddings_path,
+                               epochs=100,
+                               batch_size=256,
+                               learning_rate=0.001,
+                               patience=20,
+                               use_data_cache=True)
 
     # Perform Anova Analysis on predictions
     print("""

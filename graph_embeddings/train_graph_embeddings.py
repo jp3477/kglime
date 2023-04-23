@@ -18,6 +18,7 @@ from torchmetrics import RetrievalMRR
 import dgl
 import networkx as nx
 from sklearn.model_selection import train_test_split
+from utils import CONFIG_PATH
 
 # Package imports
 from .gcn import RGCNModel
@@ -25,7 +26,7 @@ from .gcn import RGCNModel
 RANDOM_SEED = 1
 
 CONFIG = configparser.ConfigParser()
-CONFIG.read('config.ini')
+CONFIG.read(CONFIG_PATH)
 
 
 def print_first_proc(*values, proc_id=0):
