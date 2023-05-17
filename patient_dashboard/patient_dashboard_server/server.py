@@ -15,6 +15,8 @@ from utils import PROJECT_PATH
 # from tensorflow.python.keras.layers import deserialize, serialize
 # from tensorflow.python.keras.saving import saving_utils
 import pathos.multiprocessing as multiprocessing
+import numpy as np
+import json
 
 from tensorflow import keras
 import tensorflow as tf
@@ -35,7 +37,9 @@ PATIENT_SEQUENCES_CSV = PROJECT_PATH / 'run_output/adverse_event_prediction_mode
 JOINT_ADE_MODEL_PATH = PROJECT_PATH / 'run_output/adverse_event_prediction_model/'
 
 KNOWLEDGE_GRAPH_PATH = PROJECT_PATH / 'run_output/knowledge_graph.pkl'
-EMBEDDINGS_DISTANCES_PATH = PROJECT_PATH / 'run_output/adverse_event_prediction_model/sparse_dist_info.pkl'
+EMBEDDINGS_DISTANCES_PATH = PROJECT_PATH / 'run_output/adverse_event_prediction_model/dense_dists_mat.npy'
+EMBEDDINGS_PROBS_PATH = PROJECT_PATH / 'run_output/adverse_event_prediction_model/dense_probs_mat.npy'
+REL_KEY_PATH = PROJECT_PATH / 'run_output/rel_key.json'
 
 RISK_SCORE_MODELS = {}
 
@@ -130,6 +134,7 @@ def load_model(d):
 
 KNOWLEDGE_GRAPH = {}
 EMBEDDINGS_DISTANCES = {}
+REL_KEY = {}
 
 
 def round_float(data):
@@ -179,8 +184,10 @@ def get_predictions(drug_era_id):
                                         drug_era_id]
 
     risk_scores = predict_risk_scores(RISK_SCORE_MODELS, patient_sequence)
-    risk_scores = dict(
-        sorted(risk_scores.items(), key=lambda x: x[1], reverse=True))
+    # risk_scores = dict(
+    #     sorted(risk_scores.items(), key=lambda x: x[1], reverse=True))
+    risk_scores = sorted(risk_scores, key=lambda x: x['pred'], reverse=True)
+
     print(risk_scores)
     # print(risk_scores_and_exp)
     # return jsonify(risk_scores_and_exp)
@@ -198,7 +205,8 @@ def get_explanation(drug_era_id, ae_name):
 
     explanation = explain_patient_sequence(RISK_SCORE_MODELS, patient_sequence,
                                            KNOWLEDGE_GRAPH,
-                                           EMBEDDINGS_DISTANCES, ae_name)
+                                           EMBEDDINGS_DISTANCES,
+                                           EMBEDDINGS_PROBS, REL_KEY, ae_name)
 
     return jsonify(explanation)
 
@@ -207,7 +215,8 @@ if __name__ == '__main__':
     app.logger.info("Loading risk score models")
     print("Diving into multiprocessing")
     model_dirs = [
-        p for p in list(Path(JOINT_ADE_MODEL_PATH).iterdir()) if p.is_dir()
+        p for p in list(Path(JOINT_ADE_MODEL_PATH).iterdir())
+        if p.is_dir() and p.stem in ['Leukopenia', 'Pain', 'Nausea']
         # and p.stem in [
         #     'Nausea', 'Infection', 'Hypertension', 'Headache', 'Rash',
         #     'Pyrexia', 'Diarrhoea', 'Arthralgia', 'Back pain',
@@ -218,19 +227,18 @@ if __name__ == '__main__':
         # ]
     ]
 
-    pool = multiprocessing.Pool(processes=18)
-
-    with keras.utils.custom_object_scope({
-            'RobustScalerLayer': RobustScalerLayer,
-            # 'adverse_event_prediction>PWLCalibration':
-            # PWLCalibration,
-            # 'adverse_event_prediction>RobustScalerLayer':
-            # RobustScalerLayer,
-            'PWLCalibration': PWLCalibration,
-            'SliceLayer': SliceLayer
-    }):
-        risk_models_list = pool.map(load_model, model_dirs)
-    RISK_SCORE_MODELS = dict(risk_models_list)
+    with multiprocessing.Pool(processes=18) as pool:
+        with keras.utils.custom_object_scope({
+                'RobustScalerLayer': RobustScalerLayer,
+                # 'adverse_event_prediction>PWLCalibration':
+                # PWLCalibration,
+                # 'adverse_event_prediction>RobustScalerLayer':
+                # RobustScalerLayer,
+                'PWLCalibration': PWLCalibration,
+                'SliceLayer': SliceLayer
+        }):
+            risk_models_list = pool.map(load_model, model_dirs)
+        RISK_SCORE_MODELS = dict(risk_models_list)
 
     app.logger.info("Loading knowledge graph")
     print("Loading knowledge graph")
@@ -239,6 +247,12 @@ if __name__ == '__main__':
     app.logger.info("Loading embedding distances")
     print("Loading embedding distances")
     with open(EMBEDDINGS_DISTANCES_PATH, 'rb') as f:
-        EMBEDDINGS_DISTANCES = pickle.load(f)
+        EMBEDDINGS_DISTANCES = np.load(f)
+
+    with open(EMBEDDINGS_PROBS_PATH, 'rb') as f:
+        EMBEDDINGS_PROBS = np.load(f)
+
+    with open(REL_KEY_PATH, 'r') as f:
+        REL_KEY = json.load(f)
 
     app.run(debug=False)

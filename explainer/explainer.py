@@ -6,7 +6,7 @@ from pathlib import Path
 
 # Third-party imports
 import pandas as pd
-from .kglime_explainer import KGLIMEExplainer, TableDomainMapper
+from kglime_explainer import KGLIMEExplainer, KGLIMEDomainMapper
 import numpy as np
 
 # Package imports
@@ -28,12 +28,125 @@ import tensorflow as tf
 def kglime_explain(patient_sequence,
                    ade_model,
                    knowledge_graph,
-                   sparse_dist_info,
+                   dense_dists_mat,
+                   dense_probs_mat,
+                   rel_key,
                    index_date,
-                   domains=['Condition', 'Drug', 'Measurement'],
-                   domain_relation_map=None,
                    num_samples=10000,
                    num_features=10):
+
+    index_to_key = np.array(sorted(list(knowledge_graph.nodes)))
+    key_to_index = dict(zip(index_to_key, range(len(index_to_key))))
+
+    categorical_names = {}
+    for concept_id in knowledge_graph.nodes:
+        categorical_names[concept_id] = knowledge_graph.nodes[concept_id][
+            'title']
+
+    categorical_names[0] = 'OOV'
+    categorical_names[-1] = 'OOV'
+
+    class_names = ['No AE', 'AE']
+
+    explainer = KGLIMEExplainer(int(
+        CONFIG['MODEL PARAMETERS']['max_sequence_length']),
+                                2,
+                                dense_dists_mat,
+                                dense_probs_mat,
+                                index_to_key,
+                                key_to_index,
+                                rel_key,
+                                mode="classification",
+                                feature_names=["concept_id"],
+                                categorical_features=[0],
+                                categorical_names=categorical_names,
+                                class_names=class_names,
+                                feature_selection='auto')
+
+    KGLIMEDomainMapper.map_exp_ids = KGLIMEDomainMapper._map_exp_ids_with_features
+    exp = explainer.explain_instance(
+        patient_sequence,
+        lambda x: ade_model(x).numpy().reshape(-1, 1),
+        num_samples=num_samples,
+        num_features=num_features,
+        top_labels=None,
+        labels=[
+            0,
+        ])
+    # KGLIMEDomainMapper.map_exp_ids = KGLIMEDomainMapper._map_exp_ids
+
+    # Parse explanations
+
+    # feat_indexes = [
+    #     feat[0] for feat in exp.as_map()[0]
+    #     if patient_sequence[feat[0]][0] != 0
+    # ]
+
+    feats = [
+        feat[0] for feat in exp.as_list(label=0) if feat[0].concept_id != 0
+    ]
+
+    exp_scores = [
+        feat[1] for feat in exp.as_list(label=0) if feat[0].concept_id != 0
+    ]
+    concept_names = []
+    days_backs = []
+    concept_ids = []
+    concept_dates = []
+    concept_domains = []
+    rels = []
+
+    for feat in feats:
+        concept_id = feat.concept_id
+        item_name = knowledge_graph.nodes[concept_id]['concept_name']
+        domain_id = knowledge_graph.nodes[concept_id]['domain_id']
+
+        # days_back = int(patient_sequence[feat_index][1] - 1)
+        days_back = feat.days_elapsed
+        item_date = index_date - timedelta(days=days_back)
+        rel = feat.rel
+
+        concept_names.append(item_name)
+        concept_dates.append(item_date)
+        days_backs.append(days_back)
+        concept_ids.append(concept_id)
+        concept_domains.append(domain_id)
+        rels.append(rel)
+    # else:
+    #     days_back = int(patient_sequence[feat_index - MAXLEN][1] - 1)
+    #     item_date = index_date - timedelta(days=days_back)
+    #     item_name = f"days_back={patient_sequence[feat_index - MAXLEN][1] - 1}"
+
+    #     concept_names.append(item_name)
+    #     concept_dates.append(item_date)
+    #     days_backs.append(days_back)
+    #     concept_ids.append(0)
+    #     concept_domains.append('None')
+
+    exp_df = pd.DataFrame({
+        'concept_id': concept_ids,
+        'concept_name': concept_names,
+        'rel': rels,
+        'days_back': days_backs,
+        'dates': concept_dates,
+        'score': exp_scores,
+        'concept_domain': concept_domains
+    })
+
+    exp_df['dates'] = exp_df['dates'].dt.strftime('%Y-%m-%d')
+
+    return exp_df
+
+
+def kglime_explain_old(patient_sequence,
+                       ade_model,
+                       knowledge_graph,
+                       sparse_dist_info,
+                       index_date,
+                       domains=['Condition', 'Drug', 'Measurement'],
+                       domain_relation_map=None,
+                       num_samples=500,
+                       num_features=10):
     if domain_relation_map is None:
         domain_relation_map = {
             'Condition': 'inv_has_ae',
@@ -193,7 +306,8 @@ def kglime_explain(patient_sequence,
 
 
 def explain_patient_sequence(ade_models, patient_sequence_df, knowledge_graph,
-                             embedding_distances_matrix, ae_name):
+                             dense_dists_mat, dense_probs_mat, rel_key,
+                             ae_name):
     condensed_sequence = condense_sequences(patient_sequence_df)
     patient_sequence, patient_sequence_dates = build_padded_sequences(
         condensed_sequence, maxlen=MAXLEN, include_dates=True)
@@ -205,12 +319,17 @@ def explain_patient_sequence(ade_models, patient_sequence_df, knowledge_graph,
     # ade_models = ade_joint_model.layers[1:-1]
     ade_model = ade_models[ae_name]
 
+    rel_key = list(rel_key.keys())
+    rel_key.append('identity')
     explanation = kglime_explain(patient_sequence,
                                  ade_model,
                                  knowledge_graph,
-                                 embedding_distances_matrix,
+                                 dense_dists_mat,
+                                 dense_probs_mat,
+                                 rel_key,
                                  index_date,
-                                 num_features=20)
+                                 num_features=20,
+                                 num_samples=5000)
 
     print('explanation_type, ', explanation)
     explanation = explanation.fillna(0)
@@ -230,19 +349,23 @@ def predict_risk_scores(ade_models, patient_sequence_df):
     patient_sequence = np.stack([patient_sequence, patient_sequence_dates],
                                 axis=-1)[0]
 
-    adverse_effect_names = ade_models.keys()
+    # adverse_effect_names = ade_models.keys()
     ade_preds = []
-    for _, ade_model in ade_models.items():
+    for adverse_effect_name, ade_model in ade_models.items():
         ade_pred = round(
             # np.squeeze(ade_model.predict(np.expand_dims(patient_sequence,
             #                                             0))).item(), 2)
             np.squeeze(ade_model(np.expand_dims(patient_sequence, 0))).item(),
             2)
-        ade_preds.append(ade_pred)
+        # ade_preds.append(ade_pred)
+        ade_preds.append({
+            'adverse_effect_name': adverse_effect_name,
+            'pred': ade_pred
+        })
 
-    ade_preds_zipped = dict(zip(adverse_effect_names, ade_preds))
+    # ade_preds_zipped = dict(zip(adverse_effect_names, ade_preds))
 
-    return ade_preds_zipped
+    return ade_preds
 
 
 # def predict_risk_scores(ade_joint_model, patient_sequence_df):
@@ -264,4 +387,48 @@ def predict_risk_scores(ade_models, patient_sequence_df):
 #     return ade_preds_zipped
 
 if __name__ == '__main__':
-    pass
+    from cohort import get_concept_sequences_with_drug_era_ids
+    from pathlib import Path
+    from tensorflow import keras
+    import tensorflow as tf
+    import networkx as nx
+    import os
+    import numpy as np
+    import json
+    import argparse
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('model_path')
+    parser.add_argument('drug_era_id', type=int)
+    parser.add_argument('knowledge_graph_path')
+    parser.add_argument('rel_key_path')
+
+    args = parser.parse_args()
+    saved_model_path = Path(args.model_path) / 'Nausea/calibrated_model'
+
+    print('loading model')
+    model = keras.models.load_model(saved_model_path)
+    print("getting concept sequence")
+    patient_sequence_df = get_concept_sequences_with_drug_era_ids(
+        args.drug_era_id)
+    print("reading knowledge graph")
+    knowledge_graph = nx.read_gpickle(Path(args.knowledge_graph_path))
+
+    print("Opening dense matrices")
+    with open(Path(args.model_path) / 'dense_dists_mat.npy', 'rb') as f:
+        dense_dists_mat = np.load(f)
+
+    with open(Path(args.model_path) / 'dense_probs_mat.npy', 'rb') as f:
+        dense_probs_mat = np.load(f)
+
+    with open(Path(args.rel_key_path), 'r') as f:
+        rel_key = json.load(f)
+
+    print("Explaining sequence")
+    explanation = explain_patient_sequence({'Nausea': model},
+                                           patient_sequence_df,
+                                           knowledge_graph, dense_dists_mat,
+                                           dense_probs_mat, rel_key, 'Nausea')
+
+    print(explanation)

@@ -4,6 +4,7 @@ Functions for explaining classifiers that use tabular data (matrices).
 import copy
 from functools import partial
 import json
+from numba import njit, jit
 
 import numpy as np
 import scipy as sp
@@ -171,7 +172,8 @@ class CustomLimeBase(object):
                                    label,
                                    num_features,
                                    feature_selection='auto',
-                                   model_regressor=None):
+                                   model_regressor=None,
+                                   original_shape=None):
         """Takes perturbed data, labels and distances, returns explanation.
 
         Args:
@@ -211,10 +213,11 @@ class CustomLimeBase(object):
         weights = self.kernel_fn(distances)
         labels_column = neighborhood_labels[:, label]
         feature_selection = 'highest_weights'
-        used_features = self.feature_selection(neighborhood_data,
-                                               labels_column, weights,
-                                               num_features, feature_selection)
+        # used_features = self.feature_selection(neighborhood_data,
+        #                                        labels_column, None,
+        #                                        num_features, feature_selection)
 
+        used_features = range(neighborhood_data.shape[1])
         used_neighborhood_data = neighborhood_data[:, used_features]
 
         x_train, x_val, y_train, y_val, sample_weights_train, sample_weights_val = train_test_split(
@@ -256,16 +259,45 @@ class CustomLimeBase(object):
         #     )
         #     print('Right:', neighborhood_labels[0, label])
         easy_model.intercept_ = 0.0
+        importances_mean = r.importances_mean.reshape(original_shape)
+        importance_mean_maxes = np.max(importances_mean, axis=1)
+        importance_mean_max_indices = np.argpartition(
+            importance_mean_maxes, -num_features)[-num_features:]
+
+        importances_mean_max_rel_indices = np.argmax(importances_mean, axis=1)
+
+        used_features = zip(
+            importance_mean_max_indices,
+            importances_mean_max_rel_indices[importance_mean_max_indices])
+        chosed_importance_means = importance_mean_maxes[
+            importance_mean_max_indices]
+
+        # if original_shape is not None:
+        #     print('Used features original, ', used_features)
+        #     print('Neighborhood_data[0] shape, ', neighborhood_data[0].shape)
+        #     used_features = [
+        #         np.unravel_index(
+        #             np.ravel_multi_index((used_feature, ),
+        #                                  neighborhood_data[0].shape),
+        #             original_shape) for used_feature in used_features
+        #     ]
+        #     print('Used features changed, ', used_features)
+
+        # zip(used_features, r.importances_mean)
         return (easy_model.intercept_,
-                sorted(zip(used_features, r.importances_mean),
+                sorted(zip(used_features, chosed_importance_means),
                        key=lambda x: np.abs(x[1]),
                        reverse=True), prediction_score, local_pred)
 
 
-class Feature:
-    def __init__(self, display_name, name):
-        self.display_name = display_name
-        self.name = name
+class KGLIMEFeature:
+    def __init__(self, concept_id, rel, days_elapsed):
+
+        self.concept_id = concept_id
+        self.rel = rel
+        self.days_elapsed = days_elapsed
+
+        self.display_name = f"{self.concept_id}, {self.rel} (t-{days_elapsed} days)"
 
     def __repr__(self):
         return self.display_name
@@ -277,14 +309,16 @@ class Feature:
         return hash(self.display_name)
 
 
-class TableDomainMapper(explanation.DomainMapper):
+class KGLIMEDomainMapper(explanation.DomainMapper):
     """Maps feature ids to names, generates table views, etc"""
     def __init__(self,
                  feature_names,
                  feature_values,
                  feature_real_values,
+                 days_elapsed,
                  scaled_row,
                  categorical_features,
+                 rel_key,
                  discretized_feature_names=None,
                  feature_indexes=None):
         """Init.
@@ -302,6 +336,7 @@ class TableDomainMapper(explanation.DomainMapper):
         self.feature_names = feature_names
         self.feature_values = feature_values
         self.feature_real_values = feature_real_values
+        self.days_elapsed = days_elapsed
         self.feature_indexes = feature_indexes
         self.scaled_row = scaled_row
         if sp.sparse.issparse(scaled_row):
@@ -309,6 +344,7 @@ class TableDomainMapper(explanation.DomainMapper):
         else:
             self.all_categorical = len(categorical_features) == len(scaled_row)
         self.categorical_features = categorical_features
+        self.rel_key = rel_key
 
     def map_exp_ids(self, exp):
         """Maps ids to feature names.
@@ -319,7 +355,6 @@ class TableDomainMapper(explanation.DomainMapper):
         Returns:
             list of tuples (feature_name, weight)
         """
-
         return self._map_exp_ids_with_features(exp)
 
     def _map_exp_ids(self, exp):
@@ -329,19 +364,28 @@ class TableDomainMapper(explanation.DomainMapper):
         return [(names[x[0]], x[1]) for x in exp]
 
     def _map_exp_ids_with_features(self, exp):
-        names = [
-            Feature(display_name, self.feature_real_values[i])
-            for i, display_name in enumerate(self.exp_feature_names)
-        ]
+
+        # names = [
+        #     KGLIMEFeature(display_name, self.feature_real_values[i])
+        #     for i, display_name in enumerate(self.exp_feature_names)
+        # ]
+        names = [[
+            KGLIMEFeature(self.feature_real_values[coords[0]],
+                          self.rel_key[coords[1]],
+                          self.days_elapsed[coords[0]]), score
+        ] for coords, score in exp]
+
         if self.discretized_feature_names is not None:
             # names = self.discretized_feature_names
 
             names = [
-                Feature(display_name, self.feature_real_values[i]) for i,
-                display_name in enumerate(self.discretized_feature_names)
+                KGLIMEFeature(concept_id, self.feature_real_values[i],
+                              self.rels[i], self.days_elapsed[i])
+                for i, concept_id in enumerate(self.feature_real_values)
             ]
-
-        return [(names[x[0]], x[1]) for x in exp]
+        # print(exp)
+        # return [(names[x[0]], x[1]) for x in exp]
+        return names
 
     def visualize_instance_html(self,
                                 exp,
@@ -409,8 +453,7 @@ class LimeVectorizedExplainer(object):
                  class_names=None,
                  feature_selection='auto',
                  sample_around_instance=False,
-                 random_state=None,
-                 feature_neighbor_fns=None):
+                 random_state=None):
         """Init function.
 
         Args:
@@ -485,8 +528,6 @@ class LimeVectorizedExplainer(object):
         self.base = CustomLimeBase(kernel_fn,
                                    verbose=verbose,
                                    random_state=self.random_state)
-
-        self.feature_neighbor_fns = feature_neighbor_fns
 
     @staticmethod
     def convert_and_round(values):
@@ -565,14 +606,16 @@ class LimeVectorizedExplainer(object):
             explanations.
         """
 
-        data, inverse, all_dists = self.__data_inverse(data_row, num_samples)
-
+        data, inverse, all_dists, rels = self.__data_inverse(
+            data_row, num_samples)
         scaled_data = all_dists
 
-        distances = sklearn.metrics.pairwise_distances(all_dists,
-                                                       all_dists[0].reshape(
-                                                           1, -1),
-                                                       metric='l1').ravel()
+        distances = sklearn.metrics.pairwise_distances(
+            all_dists.sum(axis=2),
+            all_dists.sum(axis=2)[0].reshape(1, -1),
+            metric='l1').ravel()
+
+        scaled_data = scaled_data.reshape((scaled_data.shape[0], -1))
 
         yss, full_data_row = predict_fn(inverse)
 
@@ -631,6 +674,8 @@ class LimeVectorizedExplainer(object):
 
         data_row_stacked = np.reshape(full_data_row,
                                       (2, len(self.categorical_features)))
+
+        days_elapsed_row = data_row_stacked[1]
         for i in self.categorical_features:
             name = int(data_row_stacked[0][i])
             name = self.categorical_names[name]
@@ -644,12 +689,14 @@ class LimeVectorizedExplainer(object):
         discretized_feature_names = None
 
         real_values = list(data_row)
-        domain_mapper = TableDomainMapper(
+        domain_mapper = KGLIMEDomainMapper(
             feature_names,
             values,
             real_values,
+            days_elapsed_row,
             scaled_data[0],
             categorical_features=categorical_features,
+            rel_key=self.rel_key,
             discretized_feature_names=discretized_feature_names,
             feature_indexes=feature_indexes)
         ret_exp = explanation.Explanation(domain_mapper,
@@ -676,7 +723,8 @@ class LimeVectorizedExplainer(object):
                  label,
                  num_features,
                  model_regressor=model_regressor,
-                 feature_selection=self.feature_selection)
+                 feature_selection=self.feature_selection,
+                 original_shape=all_dists[0].shape)
 
         if self.mode == "regression":
             ret_exp.intercept[1] = ret_exp.intercept[0]
@@ -708,6 +756,15 @@ class LimeVectorizedExplainer(object):
                 inverse: same as data, except the categorical features are not
                 binary, but categorical (as the original data)
         """
+        @jit
+        def vectorized_choice(p, n, items=None):
+            s = p.cumsum(axis=1)
+            r = np.random.rand(p.shape[0], n, 1)
+            q = np.expand_dims(s, 1) >= r
+            k = q.argmax(axis=-1)
+            if items is not None:
+                k = np.asarray(items)[k]
+            return k
 
         num_cols = data_row.shape[0]
         data = np.zeros((num_samples, num_cols))
@@ -715,34 +772,52 @@ class LimeVectorizedExplainer(object):
         first_row = data_row
         data[0] = data_row.copy()
         inverse = data.copy()
-        all_dists = np.zeros((num_samples, num_cols))
+        all_dists = np.zeros((num_samples, num_cols, self.num_rels))
+        all_rels = np.zeros_like(data)
 
         for column in self.categorical_features:
-            if data_row[column] in [0]:
+            if data_row[column] in [
+                    0
+            ] or not (column in self.categorical_features):
                 inverse_column = np.repeat(data_row[column], num_samples)
             else:
-                if column in self.categorical_features and self.feature_neighbor_fns:
-                    values, dists, freqs = self.feature_neighbor_fns(
-                        data_row[column])
+                values, dists_initial, freqs = self._feature_neighbor_fns(
+                    data_row[column])
+                rels = self.random_state.choice(
+                    range(self.num_rels), size=num_samples,
+                    replace=True).astype(int).flatten()
+                # dists = dists[rels]
+                # freqs = freqs[rels]
 
-                else:
-                    values = self.feature_values[column].copy()
-                    freqs = self.feature_frequencies[column].copy()
-                    if 0 in values and len(values) > 1:
-                        zero_idx = values.index(0)
-                        values.remove(0)
-                        freqs = np.delete(freqs, zero_idx)
-                        freqs = freqs / np.sum(freqs)
+                # print('dists shape, ', dists.shape)
+                # print('freqs shape, ', freqs.shape)
+                print('sampling indices')
+                sample_indices = vectorized_choice(freqs[rels], 1,
+                                                   range(
+                                                       len(values))).flatten()
+                # sample_indices = np.ones(num_samples).astype(int)
+                # sample_indices = np.zeros((num_samples, )).astype(int)
+                # for i in range(num_samples):
+                #     rel = rels[i]
+                #     sample_indices[i] = self.random_state.choice(range(
+                #         len(values)),
+                #                                                  size=1,
+                #                                                  replace=True,
+                #                                                  p=freqs[rel])
 
-                    dists = np.zeros_like(values)
+                inverse_column = np.array(values)[sample_indices].flatten()
 
-                sample_indices = self.random_state.choice(range(len(values)),
-                                                          size=num_samples,
-                                                          replace=True,
-                                                          p=freqs).astype(int)
+                print('getting distances')
+                dists = dists_initial[rels][
+                    np.indices(sample_indices.shape)[0],
+                    sample_indices].flatten()
+                # dists = np.zeros((num_samples, ))
+                # for i in range(num_samples):
+                #     rel = rels[i]
+                #     sample_index = sample_indices[i]
+                #     dists[i] = dists_initial[rel][sample_index]
 
-                inverse_column = np.array(values)[sample_indices]
-                dists = dists[sample_indices]
+                all_rels[:, column] = rels
 
             binary_column = (inverse_column == first_row[column]).astype(int)
             binary_column[0] = 1
@@ -751,15 +826,21 @@ class LimeVectorizedExplainer(object):
             data[:, column] = binary_column
             inverse[:, column] = inverse_column
 
-            if self.feature_neighbor_fns is not None and data_row[
-                    column] not in [0]:
-                all_dists[1:, column] = dists[1:]
+            print('all_dists shape:  ', all_dists.shape)
+            print('dists shape:  ', dists.shape)
+            if data_row[column] not in [0]:
+                all_dists[:, column][np.indices(rels.shape)[0],
+                                     rels] = dists.flatten()
+                # for i in range(1, num_samples):
+                #     rel = rels[i]
+
+                #     all_dists[i, column, rel] = dists[i]
             else:
                 all_dists[:, column] = 0.0
 
         inverse[0] = data_row
 
-        return data, inverse, all_dists
+        return data, inverse, all_dists, all_rels
 
 
 class KGLIMEExplainer(LimeVectorizedExplainer):
@@ -779,6 +860,11 @@ class KGLIMEExplainer(LimeVectorizedExplainer):
     def __init__(self,
                  n_timesteps,
                  n_features,
+                 dense_dists_mat,
+                 dense_probs_mat,
+                 index_to_key,
+                 key_to_index,
+                 rel_key,
                  mode="classification",
                  feature_names=None,
                  categorical_features=None,
@@ -786,8 +872,7 @@ class KGLIMEExplainer(LimeVectorizedExplainer):
                  verbose=False,
                  class_names=None,
                  feature_selection='auto',
-                 random_state=None,
-                 feature_neighbor_fns=None):
+                 random_state=None):
         """
         Args:
             training_data: numpy 3d array with shape
@@ -830,6 +915,13 @@ class KGLIMEExplainer(LimeVectorizedExplainer):
         self.n_timesteps = n_timesteps
         self.n_features = n_features
 
+        self.dense_dists_mat = dense_dists_mat
+        self.dense_probs_mat = dense_probs_mat
+        self.num_rels = int(self.dense_probs_mat.shape[0])
+        self.index_to_key = index_to_key
+        self.key_to_index = key_to_index
+        self.rel_key = rel_key
+
         if feature_names is None:
             feature_names = ['feature%d' % i for i in range(n_features)]
 
@@ -858,8 +950,7 @@ class KGLIMEExplainer(LimeVectorizedExplainer):
                          verbose=verbose,
                          class_names=class_names,
                          feature_selection=feature_selection,
-                         random_state=random_state,
-                         feature_neighbor_fns=feature_neighbor_fns)
+                         random_state=random_state)
 
     def _make_predict_proba(self, func):
         """
@@ -876,6 +967,17 @@ class KGLIMEExplainer(LimeVectorizedExplainer):
                 (n_samples, -1))[0]
 
         return predict_proba
+
+    def _feature_neighbor_fns(self, concept_id):
+        i = self.key_to_index[concept_id]
+
+        # rel = np.random.randint(0, self.num_rels)
+
+        values = self.index_to_key
+        probs = self.dense_probs_mat[:, i, :]
+        dists = self.dense_dists_mat[:, i, :]
+
+        return values, dists, probs
 
     def explain_instance(self,
                          data_row,
