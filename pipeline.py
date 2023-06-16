@@ -14,25 +14,26 @@ from knowledge_graph import create_knowledge_graph
 from cohort import (build_cohort, write_vocabulary_to_table)
 from graph_embeddings.train_graph_embeddings import train_graph_embeddings_mp
 from risk_score_model.adverse_event_prediction import train_adverse_event_models
+from graph_embeddings.perturbations import save_embedding_distances_and_probs
 from utils import CONFIG_PATH
 
 CONFIG = configparser.ConfigParser()
 CONFIG.read(CONFIG_PATH)
 
-MS_DMT_DRUGS_CSV = Path("ms_dmt_drugs.csv")
-ADVERSE_EFFECTS_CSV = Path("adverse_effects.csv")
-
-OUTPUT_DIR = Path('run_output')
+MS_DMT_DRUGS_CSV = Path(CONFIG['REFERENCE FILES']['ms_dmt_drugs_file'])
+ADVERSE_EFFECTS_CSV = Path(CONFIG['REFERENCE FILES']['adverse_effects_file'])
 
 
-def main():
+def main(output_dir):
     # Create drug digraph
     print("""
 ############################################################
 Creating drug graph
 ############################################################
     """)
-    knowledge_graph_path = OUTPUT_DIR / "knowledge_graph.pkl"
+    knowledge_graph_path = Path(
+        output_dir) / CONFIG['MODEL FILES']['knowledge_graph_file']
+
     # knowledge_graph = create_knowledge_graph("myfakedbstring",
     #                                          knowledge_graph_path,
     #                                          use_cache=True)
@@ -64,7 +65,7 @@ Training graph embeddings
     """)
 
     trained_embeddings_dir = Path(
-        OUTPUT_DIR) / CONFIG['EMBEDDING FILES']['embeddings_dir']
+        output_dir) / CONFIG['EMBEDDING FILES']['embeddings_dir']
 
     # train_graph_embeddings_mp(knowledge_graph,
     #                           trained_embeddings_dir,
@@ -80,6 +81,15 @@ Training graph embeddings
     #                           basis=6,
     #                           dropout=0.0)
 
+    # Calculate Embedding Distances and Probabilities
+    print("""
+############################################################
+Calculating embedding distances and probabilities
+############################################################
+    """)
+
+    save_embedding_distances_and_probs(output_dir)
+
     # Train Adverse Event prediction model
     print("""
 ############################################################
@@ -90,7 +100,7 @@ Train adverse event prediction model
     node_embeddings_path = trained_embeddings_dir / CONFIG['EMBEDDING FILES'][
         'node_embeddings_file']
     ae_prediction_model_path = Path(
-        OUTPUT_DIR) / CONFIG['MODEL FILES']['model_dir']
+        output_dir) / CONFIG['MODEL FILES']['model_dir']
     train_adverse_event_models(ae_concepts,
                                knowledge_graph_path,
                                ae_prediction_model_path,
@@ -124,7 +134,6 @@ Running LIME explanation model
 ############################################################
     """)
 
-    # # for ae_name in ae_names:
     # base_path = Path(OUTPUT_DIR) / f'adverse_event_prediction_model/'
 
     # model_dir = base_path / 'saved_model'
@@ -142,4 +151,10 @@ Running LIME explanation model
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description="Train a ML pipeline for adverse drug event predictions")
-    main()
+
+    parser.add_argument('output_dir',
+                        '-o',
+                        help='Output path for pipeline run.')
+    args = parser.parse_args()
+
+    main(args.output_dir)

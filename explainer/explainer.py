@@ -94,7 +94,6 @@ def kglime_explain(patient_sequence,
     concept_ids = []
     concept_dates = []
     concept_domains = []
-    rels = []
 
     for feat in feats:
         concept_id = feat.concept_id
@@ -104,14 +103,12 @@ def kglime_explain(patient_sequence,
         # days_back = int(patient_sequence[feat_index][1] - 1)
         days_back = feat.days_elapsed
         item_date = index_date - timedelta(days=days_back)
-        rel = feat.rel
 
         concept_names.append(item_name)
         concept_dates.append(item_date)
         days_backs.append(days_back)
         concept_ids.append(concept_id)
         concept_domains.append(domain_id)
-        rels.append(rel)
     # else:
     #     days_back = int(patient_sequence[feat_index - MAXLEN][1] - 1)
     #     item_date = index_date - timedelta(days=days_back)
@@ -126,7 +123,6 @@ def kglime_explain(patient_sequence,
     exp_df = pd.DataFrame({
         'concept_id': concept_ids,
         'concept_name': concept_names,
-        'rel': rels,
         'days_back': days_backs,
         'dates': concept_dates,
         'score': exp_scores,
