@@ -14,9 +14,9 @@ import numpy as np
 COLORS = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
 
-def evalute_calibrated_model(calibrated_models, uncalibrated_models, x_train,
-                             train_labels, x_test, test_labels, ae_names,
-                             output_dir):
+def evaluate_calibrated_model(calibrated_models, uncalibrated_models, x_train,
+                              train_labels, x_test, test_labels, ae_names,
+                              output_dir):
 
     logging.info(f'Predicting calibrated and uncalibrated for train and test')
 

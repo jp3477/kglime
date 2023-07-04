@@ -18,12 +18,12 @@ import networkx as nx
 import dill as pickle
 
 # Package imports
-from .layers import RobustScalerLayer, SliceLayer
+from .layers import RobustScalerLayer
 from cohort import get_adverse_event_labels, get_concept_sequences_with_drug_era_ids
-from .calibration import build_calibrated_model, build_joint_calibrated_model
+from .calibration import build_calibrated_model
 from .loss import BinaryFocalLoss
 from .sequencer import build_padded_sequences, condense_sequences
-from .evaluation import evalute_calibrated_model
+from .evaluation import evaluate_calibrated_model
 from utils import CONFIG_PATH
 
 #Make keras pickalable
@@ -35,6 +35,9 @@ CONFIG = configparser.ConfigParser()
 CONFIG.read(CONFIG_PATH)
 
 MAXLEN = int(CONFIG['MODEL PARAMETERS']['max_sequence_length'])
+
+MS_DMT_DRUGS_CSV = Path(CONFIG['REFERENCE FILES']['ms_dmt_drugs_file'])
+ADVERSE_EFFECTS_CSV = Path(CONFIG['REFERENCE FILES']['adverse_effects_file'])
 
 seed(1)
 logging.basicConfig(level=logging.INFO)
@@ -141,12 +144,12 @@ def build_model(pretrained_weights,
                 dropout=0.6))(x)
 
     x = keras.layers.Dense(
-        100,
+        20,
         activation='relu',
     )(x)
     x = keras.layers.BatchNormalization()(x)
     x = keras.layers.Dropout(0.6)(x)
-    x = keras.layers.Dense(100, activation='relu')(x)
+    x = keras.layers.Dense(20, activation='relu')(x)
     x = keras.layers.BatchNormalization()(x)
     x = keras.layers.Dropout(0.6)(x)
 
@@ -157,28 +160,45 @@ def build_model(pretrained_weights,
     return model
 
 
-def train_adverse_event_model(adverse_effect_concepts,
-                              knowledge_graph_path,
-                              output_folder,
-                              embeddings_path,
-                              learning_rate=0.01,
-                              batch_size=128,
-                              epochs=30,
-                              patience=5,
-                              use_data_cache=True):
+def train_adverse_event_models(output_dir,
+                               learning_rate=0.01,
+                               batch_size=128,
+                               epochs=30,
+                               patience=5,
+                               use_data_cache=True):
 
-    Path(output_folder).mkdir(exist_ok=True)
+    adverse_event_prediction_model_dir = Path(
+        output_dir) / CONFIG['MODEL FILES']['model_dir']
 
-    data_path = Path(output_folder) / 'data.csv'
-    labels_path = Path(output_folder) / 'labels.csv'
+    drugs = pd.read_csv(MS_DMT_DRUGS_CSV)
+    drug_concept_ids = drugs['concept_id']
 
-    adverse_effect_concept_ids = list(adverse_effect_concepts['concept_id'])
-    adverse_effect_concept_names = list(
-        adverse_effect_concepts['adverse_effect_name'])
+    adverse_effect_concepts = pd.read_csv(ADVERSE_EFFECTS_CSV)
+    adverse_effect_concept_ids = adverse_effect_concepts['concept_id']
+    adverse_effect_concept_names = adverse_effect_concepts[
+        'adverse_effect_name']
+
+    logging.info(
+        f'Training adverse event model with {len(adverse_effect_concepts)} AEs'
+    )
+
+    if not Path.exists(adverse_event_prediction_model_dir):
+        Path(adverse_event_prediction_model_dir).mkdir(exist_ok=True)
+
+    data_path = Path(output_dir) / CONFIG['MODEL FILES']['data_file']
+    labels_path = Path(output_dir) / CONFIG['MODEL FILES']['labels_file']
+    node_embeddings_path = Path(
+        output_dir) / CONFIG['EMBEDDING FILES']['node_embeddings_file']
+    knowledge_graph_path = Path(
+        output_dir) / CONFIG['MODEL FILES']['knowledge_graph_file']
+
+    train_data_path = Path(
+        output_dir) / CONFIG['MODEL FILES']['train_data_file']
+    test_data_path = Path(output_dir) / CONFIG['MODEL FILES']['test_data_file']
 
     if use_data_cache and data_path.exists():
-        logging.info(f"Loading cached data from {Path(data_path)}")
-        data = pd.read_csv(Path(data_path), parse_dates=['concept_date'])
+        logging.info(f"Loading cached data from {data_path}")
+        data = pd.read_csv(data_path, parse_dates=['concept_date'])
         labels = pd.read_csv(labels_path)
     else:
         logging.info("Fetching concept sequences")
@@ -209,9 +229,9 @@ def train_adverse_event_model(adverse_effect_concepts,
         labels.to_csv(labels_path, index=False)
 
     # Load embeddings
-    node_embeddings = np.load(embeddings_path)
-    knowledge_graph_path = nx.read_gpickle(knowledge_graph_path)
-    vocab = sorted(list(knowledge_graph_path.nodes))
+    node_embeddings = np.load(node_embeddings_path)
+    knowledge_graph = nx.read_gpickle(knowledge_graph_path)
+    vocab = sorted(list(knowledge_graph.nodes))
     pretrained_weights = list(node_embeddings)
 
     # Train and Test sets (split by patient)
@@ -221,8 +241,8 @@ def train_adverse_event_model(adverse_effect_concepts,
     train_data = data[data['person_id'].isin(train_patients)]
     test_data = data[data['person_id'].isin(test_patients)]
 
-    train_data.to_csv(Path(output_folder) / 'train_data.csv', index=False)
-    test_data.to_csv(Path(output_folder) / 'test_data.csv', index=False)
+    train_data.to_csv(train_data_path, index=False)
+    test_data.to_csv(test_data_path, index=False)
 
     # Condense data
     logging.info("Condensing data")
@@ -260,7 +280,7 @@ def train_adverse_event_model(adverse_effect_concepts,
                             vocab,
                             len(node_embeddings[0]),
                             robust_scaler,
-                            lstm_units=120,
+                            lstm_units=40,
                             depth=2)
 
         model.compile(
@@ -307,11 +327,7 @@ def train_adverse_event_model(adverse_effect_concepts,
                                                   name=ae_name.replace(
                                                       " ", "_"))
 
-        # print(pickle.pickles(calibrated_model))
-        # print(calibrated_model.get_config())
-        # print(pickle.detect.badtypes(calibrated_model, depth=1))
-
-        saved_model_path = Path(output_folder) / ae_name
+        saved_model_path = Path(adverse_event_prediction_model_dir) / ae_name
         saved_model_path.mkdir(exist_ok=True)
 
         logging.info(
@@ -327,55 +343,11 @@ def train_adverse_event_model(adverse_effect_concepts,
         uncalibrated_models.append(model)
         calibrated_models.append(calibrated_model)
 
-    # joint_uncalibrated_model = build_joint_calibrated_model(
-    #     uncalibrated_models)
-    # joint_calibrated_model = build_joint_calibrated_model(calibrated_models)
-
-    # with open(
-    #         Path(saved_model_path) /
-    #         CONFIG['MODEL FILES']['calibrated_model_file'], 'wb') as f:
-    #     pickle.dump(joint_calibrated_model, f)
-
-    # with open(
-    #         Path(saved_model_path) /
-    #         CONFIG['MODEL FILES']['uncalibrated_model_file'], 'wb') as f:
-    #     pickle.dump(joint_uncalibrated_model, f)
-
-    # joint_calibrated_model.save(saved_model_path /
-    #                             CONFIG['MODEL FILES']['calibrated_model_file'])
-    # joint_uncalibrated_model.save(
-    #     saved_model_path / CONFIG['MODEL FILES']['uncalibrated_model_file'])
-
     # Evaluate model
-    evalute_calibrated_model(calibrated_models, uncalibrated_models, x_train,
-                             train_labels, x_test, test_labels,
-                             adverse_effect_concept_names, Path(output_folder))
-
-    # return joint_calibrated_model
-
-
-def train_adverse_event_models(adverse_effect_concepts,
-                               knowledge_graph_path,
-                               output_folder,
-                               embeddings_path,
-                               learning_rate=0.01,
-                               batch_size=128,
-                               epochs=30,
-                               patience=5,
-                               use_data_cache=True):
-
-    logging.info(
-        f'Training adverse event model with {len(adverse_effect_concepts)} AEs'
-    )
-    model = train_adverse_event_model(adverse_effect_concepts,
-                                      knowledge_graph_path,
-                                      output_folder,
-                                      embeddings_path,
-                                      learning_rate=learning_rate,
-                                      batch_size=batch_size,
-                                      epochs=epochs,
-                                      patience=patience,
-                                      use_data_cache=use_data_cache)
+    evaluate_calibrated_model(calibrated_models, uncalibrated_models, x_train,
+                              train_labels, x_test, test_labels,
+                              adverse_effect_concept_names,
+                              Path(adverse_event_prediction_model_dir))
 
     return model
 
@@ -387,15 +359,8 @@ if __name__ == '__main__':
         description=
         "Run pipeline for linking drug ingredients and adverse effects")
 
-    parser.add_argument('knowledge_graph')
-    parser.add_argument('embeddings', dest='embeddings_path', required=True)
-    parser.add_argument('adverse_effect_concept_ids', nargs='+')
-    parser.add_argument('adverse_effect_concept_names', nargs='+')
-    parser.add_argument('output_folder')
+    parser.add_argument('output_dir', '-o')
 
     args = parser.parse_args()
 
-    train_adverse_event_models(args.adverse_effect_concept_ids,
-                               args.adverse_effect_concept_names,
-                               args.knowledge_graph, args.output_folder,
-                               args.embeddings_path)
+    train_adverse_event_models(args.output_dir)

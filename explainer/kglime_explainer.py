@@ -30,6 +30,22 @@ from sklearn.model_selection import train_test_split
 from sklearn.inspection import permutation_importance
 
 
+def distance_kernel(x,
+                    seq_len,
+                    threshold=5.0,
+                    v=0,
+                    u=1,
+                    k_max=0.99,
+                    k_min=0.10):
+    b = 10**(np.log10(float(k_max) / k_min) / (seq_len * (u - v)))
+    a = float(k_max) / b**(-seq_len * (threshold + v))
+
+    k = a * b**(-x)
+    k = np.minimum(np.ones_like(k), k)
+
+    return k
+
+
 class CustomLimeBase(object):
     """Class for learning a locally linear sparse model from perturbed data"""
     def __init__(self, kernel_fn, verbose=False, random_state=None):
@@ -230,7 +246,8 @@ class CustomLimeBase(object):
                                     fit_intercept=True,
                                     random_state=self.random_state)
 
-        model_regressor = DecisionTreeRegressor()
+        # model_regressor = DecisionTreeRegressor()
+        model_regressor = sklearn.ensemble.RandomForestRegressor()
         easy_model = model_regressor
 
         easy_model.fit(x_train, y_train, sample_weight=sample_weights_train)
@@ -519,11 +536,14 @@ class LimeVectorizedExplainer(object):
 
         # Experiment with dynamic kernel weights
 
+        # def kernel(d):
+        #     return np.concatenate([
+        #         np.array([1.0]), 1 - MinMaxScaler(clip=True).fit_transform(
+        #             d[1:].reshape(-1, 1)).flatten()
+        #     ])
+
         def kernel(d):
-            return np.concatenate([
-                np.array([1.0]), 1 - MinMaxScaler(clip=True).fit_transform(
-                    d[1:].reshape(-1, 1)).flatten()
-            ])
+            return distance_kernel(d, self.sequence_length)
 
         kernel_fn = partial(kernel)
 
@@ -842,6 +862,7 @@ class KGLIMEExplainer(LimeVectorizedExplainer):
                  index_to_key,
                  key_to_index,
                  rel_key,
+                 sequence_length,
                  mode="classification",
                  feature_names=None,
                  categorical_features=None,
@@ -887,6 +908,8 @@ class KGLIMEExplainer(LimeVectorizedExplainer):
                 generate random numbers. If None, the random state will be
                 initialized using the internal numpy seed.
         """
+
+        self.sequence_length = sequence_length
 
         # Reshape X
         self.n_timesteps = n_timesteps

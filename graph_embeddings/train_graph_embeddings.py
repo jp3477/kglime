@@ -22,11 +22,15 @@ from utils import CONFIG_PATH
 
 # Package imports
 from .gcn import RGCNModel
+from .negative_sampler import RandomCorruptionNegativeSampler
+from .loss import AdverserialLoss
 
 RANDOM_SEED = 1
 
 CONFIG = configparser.ConfigParser()
 CONFIG.read(CONFIG_PATH)
+
+MARGIN = 5.0
 
 
 def print_first_proc(*values, proc_id=0):
@@ -41,6 +45,7 @@ def train(model,
           loss_fn,
           optimizer,
           negative_samples,
+          model_path,
           epochs=5,
           early_stopping=False,
           patience=5):
@@ -169,7 +174,7 @@ def train(model,
                 if (epoch + 1) % 2 == 0 and proc_id == 0:
                     print("Checkpointing...")
                     save_weights(model.module, model.module.G,
-                                 model.module.n_rels, Path('./pt_output/'))
+                                 model.module.n_rels, model_path)
             else:
                 epochs_without_improvement += 1
 
@@ -229,8 +234,8 @@ def save_weights(model, G, n_rels, model_path):
 
 def train_graph_embeddings(proc_id,
                            devices,
-                           nx_g_path,
-                           model_output_path,
+                           knowledge_graph_path,
+                           embeddings_dir,
                            learning_rate=0.01,
                            batch_size=256,
                            epochs=10,
@@ -261,13 +266,13 @@ def train_graph_embeddings(proc_id,
 
     # Load graph
 
-    model_path = Path(model_output_path)
+    embeddings_path = Path(embeddings_dir)
 
-    if not model_path.exists():
-        model_path.mkdir(exist_ok=True)
+    if not embeddings_path.exists():
+        embeddings_path.mkdir(exist_ok=True)
 
     print_first_proc("Converting networkx to dgl", proc_id=proc_id)
-    nx_G = nx.read_gpickle(nx_g_path)
+    nx_G = nx.read_gpickle(knowledge_graph_path)
 
     G = dgl.from_networkx(nx_G,
                           node_attrs=['concept_id'],
@@ -362,7 +367,7 @@ def train_graph_embeddings(proc_id,
                                                           device_ids=[device],
                                                           output_device=device)
 
-    loss_fn = AdverserialLoss(margin=5.0, temp=2.3)
+    loss_fn = AdverserialLoss(margin=MARGIN, temp=2.3)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     print_first_proc("Training model", proc_id=proc_id)
@@ -373,6 +378,7 @@ def train_graph_embeddings(proc_id,
                                    loss_fn,
                                    optimizer,
                                    negative_samples,
+                                   embeddings_path,
                                    epochs=epochs,
                                    early_stopping=True,
                                    patience=patience)
@@ -401,7 +407,7 @@ def train_graph_embeddings(proc_id,
         print(f'Best MRR: {best_mrr}')
 
         best_model = model
-        save_weights(best_model.module, G, n_rels, model_path)
+        save_weights(best_model.module, G, n_rels, embeddings_path)
 
     cleanup()
 
@@ -410,8 +416,7 @@ def cleanup():
     torch.distributed.destroy_process_group()
 
 
-def train_graph_embeddings_mp(nx_G,
-                              model_output_path,
+def train_graph_embeddings_mp(output_dir,
                               learning_rate=0.01,
                               batch_size=256,
                               epochs=10,
@@ -425,12 +430,17 @@ def train_graph_embeddings_mp(nx_G,
                               dropout=0.0):
     import torch.multiprocessing as mp
     print(f"Using {num_gpus} gpus")
+
+    knowledge_graph_path = Path(
+        output_dir) / CONFIG['MODEL FILES']['knowledge_graph_file']
+    embeddings_dir = Path(
+        output_dir) / CONFIG['EMBEDDING FILES']['embeddings_dir']
     try:
         mp.spawn(train_graph_embeddings,
-                 args=(list(range(num_gpus)), nx_G, model_output_path,
-                       learning_rate, batch_size, epochs, embedding_size,
-                       n_layers, negative_samples, patience, regularizer,
-                       basis, dropout),
+                 args=(list(range(num_gpus)), knowledge_graph_path,
+                       embeddings_dir, learning_rate, batch_size, epochs,
+                       embedding_size, n_layers, negative_samples, patience,
+                       regularizer, basis, dropout),
                  nprocs=num_gpus)
     except KeyboardInterrupt:
         cleanup()
@@ -441,14 +451,11 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(
         description="Create embeddings for nodes in a networkx graph")
-    parser.add_argument('nx_g_path', help='Pickled NetworkX graph')
-    parser.add_argument('model_output_path',
-                        help='Path for model output and weights')
+    parser.add_argument('output_dir', help='Output path for pipeline run.')
 
     args = parser.parse_args()
 
-    train_graph_embeddings_mp(args.nx_g_path,
-                              args.model_output_path,
+    train_graph_embeddings_mp(args.output_dir,
                               num_gpus=num_gpus,
                               embedding_size=300,
                               batch_size=1024,

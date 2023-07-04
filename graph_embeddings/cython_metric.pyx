@@ -4,6 +4,7 @@ from libc.math cimport abs
 from libc.math cimport sqrt
 cimport cython
 
+
 DTYPE = np.single
 
 @cython.boundscheck(False)  # Deactivate bounds checking

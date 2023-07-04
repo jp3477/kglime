@@ -6,8 +6,9 @@ from pathlib import Path
 
 # Third-party imports
 import pandas as pd
-from kglime_explainer import KGLIMEExplainer, KGLIMEDomainMapper
+from .kglime_explainer import KGLIMEExplainer, KGLIMEDomainMapper
 import numpy as np
+import networkx as nx
 
 # Package imports
 from risk_score_model.sequencer import build_padded_sequences, condense_sequences
@@ -32,6 +33,7 @@ def kglime_explain(patient_sequence,
                    dense_probs_mat,
                    rel_key,
                    index_date,
+                   sequence_length,
                    num_samples=10000,
                    num_features=10):
 
@@ -56,6 +58,7 @@ def kglime_explain(patient_sequence,
                                 index_to_key,
                                 key_to_index,
                                 rel_key,
+                                sequence_length,
                                 mode="classification",
                                 feature_names=["concept_id"],
                                 categorical_features=[0],
@@ -66,7 +69,7 @@ def kglime_explain(patient_sequence,
     KGLIMEDomainMapper.map_exp_ids = KGLIMEDomainMapper._map_exp_ids_with_features
     exp = explainer.explain_instance(
         patient_sequence,
-        lambda x: ade_model(x).numpy().reshape(-1, 1),
+        lambda x: ade_model.predict(x).reshape(-1, 1),
         num_samples=num_samples,
         num_features=num_features,
         top_labels=None,
@@ -301,19 +304,36 @@ def kglime_explain_old(patient_sequence,
 #     return explanations
 
 
-def explain_patient_sequence(ade_models, patient_sequence_df, knowledge_graph,
-                             dense_dists_mat, dense_probs_mat, rel_key,
-                             ae_name):
+def explain_patient_sequence(ade_model, patient_sequence_df, output_dir):
+    import json
+
+    knowledge_graph_path = Path(
+        output_dir) / CONFIG['MODEL FILES']['knowledge_graph_file']
+    rel_key_file = Path(output_dir) / CONFIG['MODEL FILES']['rel_key_file']
+
+    dense_dists_mat_file = Path(output_dir) / Path(
+        CONFIG['EMBEDDING FILES']['dense_dists_mat_file'])
+    dense_probs_mat_file = Path(output_dir) / Path(
+        CONFIG['EMBEDDING FILES']['dense_probs_mat_file'])
+
+    knowledge_graph = nx.read_gpickle(knowledge_graph_path)
+
+    dense_dists_mat = np.load(dense_dists_mat_file)
+    dense_probs_mat = np.load(dense_probs_mat_file)
+    with open(rel_key_file, 'r') as f:
+        rel_key = json.load(f)
+
+    # ade_models, patient_sequence_df, knowledge_graph,
+    #                              dense_dists_mat, dense_probs_mat, rel_key,
+    #                              ae_name
     condensed_sequence = condense_sequences(patient_sequence_df)
+    sequence_length = len(condensed_sequence['concept_id'].iloc[0])
     patient_sequence, patient_sequence_dates = build_padded_sequences(
         condensed_sequence, maxlen=MAXLEN, include_dates=True)
     patient_sequence = np.stack([patient_sequence, patient_sequence_dates],
                                 axis=-1)[0]
 
     index_date = patient_sequence_df['concept_date'].max()
-
-    # ade_models = ade_joint_model.layers[1:-1]
-    ade_model = ade_models[ae_name]
 
     rel_key = list(rel_key.keys())
     rel_key.append('identity')
@@ -324,6 +344,7 @@ def explain_patient_sequence(ade_models, patient_sequence_df, knowledge_graph,
                                  dense_probs_mat,
                                  rel_key,
                                  index_date,
+                                 sequence_length,
                                  num_features=20,
                                  num_samples=5000)
 
@@ -347,21 +368,39 @@ def predict_risk_scores(ade_models, patient_sequence_df):
 
     # adverse_effect_names = ade_models.keys()
     ade_preds = []
-    for adverse_effect_name, ade_model in ade_models.items():
+    for ade_model in ade_models.values():
         ade_pred = round(
             # np.squeeze(ade_model.predict(np.expand_dims(patient_sequence,
             #                                             0))).item(), 2)
-            np.squeeze(ade_model(np.expand_dims(patient_sequence, 0))).item(),
+            np.squeeze(ade_model.predict(np.expand_dims(patient_sequence,
+                                                        0))).item(),
             2)
         # ade_preds.append(ade_pred)
         ade_preds.append({
-            'adverse_effect_name': adverse_effect_name,
+            'adverse_effect_name': ade_model.name,
             'pred': ade_pred
         })
 
     # ade_preds_zipped = dict(zip(adverse_effect_names, ade_preds))
 
     return ade_preds
+
+
+def predict_risk_score(ade_model, patient_sequence_df):
+    condensed_sequence = condense_sequences(patient_sequence_df)
+    patient_sequence, patient_sequence_dates = build_padded_sequences(
+        condensed_sequence, maxlen=MAXLEN, include_dates=True)
+    patient_sequence = np.stack([patient_sequence, patient_sequence_dates],
+                                axis=-1)[0]
+
+    ade_pred = round(
+        # np.squeeze(ade_model.predict(np.expand_dims(patient_sequence,
+        #                                             0))).item(), 2)
+        np.squeeze(ade_model.predict(np.expand_dims(patient_sequence,
+                                                    0))).item(),
+        2)
+
+    return ade_pred
 
 
 # def predict_risk_scores(ade_joint_model, patient_sequence_df):
@@ -395,36 +434,24 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('model_path')
+    parser.add_argument('output_dir')
     parser.add_argument('drug_era_id', type=int)
-    parser.add_argument('knowledge_graph_path')
-    parser.add_argument('rel_key_path')
+    parser.add_argument('adverse_effect')
 
     args = parser.parse_args()
-    saved_model_path = Path(args.model_path) / 'Nausea/calibrated_model'
+
+    adverse_event_model_path = Path(
+        args.output_dir) / CONFIG['MODEL FILES']['model_dir']
+    saved_model_path = adverse_event_model_path / f'{args.adverse_effect}/calibrated_model'
 
     print('loading model')
     model = keras.models.load_model(saved_model_path)
     print("getting concept sequence")
     patient_sequence_df = get_concept_sequences_with_drug_era_ids(
         args.drug_era_id)
-    print("reading knowledge graph")
-    knowledge_graph = nx.read_gpickle(Path(args.knowledge_graph_path))
-
-    print("Opening dense matrices")
-    with open(Path(args.model_path) / 'dense_dists_mat.npy', 'rb') as f:
-        dense_dists_mat = np.load(f)
-
-    with open(Path(args.model_path) / 'dense_probs_mat.npy', 'rb') as f:
-        dense_probs_mat = np.load(f)
-
-    with open(Path(args.rel_key_path), 'r') as f:
-        rel_key = json.load(f)
 
     print("Explaining sequence")
-    explanation = explain_patient_sequence({'Nausea': model},
-                                           patient_sequence_df,
-                                           knowledge_graph, dense_dists_mat,
-                                           dense_probs_mat, rel_key, 'Nausea')
+    explanation = explain_patient_sequence(model, patient_sequence_df,
+                                           args.output_dir)
 
     print(explanation)

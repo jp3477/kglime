@@ -25,6 +25,12 @@ ADVERSE_EFFECTS_CSV = Path(CONFIG['REFERENCE FILES']['adverse_effects_file'])
 
 
 def main(output_dir):
+    output_dir = Path(output_dir)
+
+    # Create output dir if does not exist
+    if not Path.exists(output_dir):
+        Path.mkdir(output_dir, exist_ok=True)
+
     # Create drug digraph
     print("""
 ############################################################
@@ -47,13 +53,6 @@ Defining patient cohort
 ############################################################
     """)
 
-    drugs = pd.read_csv(MS_DMT_DRUGS_CSV)
-    drug_concept_ids = drugs['concept_id']
-
-    ae_concepts = pd.read_csv(ADVERSE_EFFECTS_CSV)
-    ae_concept_ids = ae_concepts['concept_id']
-    ae_names = ae_concepts['adverse_effect_name']
-
     # records = build_cohort(drug_concept_ids, ae_concept_ids,
     #                        CONFIG['MODEL FILES']['drug_eras_file'])
 
@@ -64,19 +63,18 @@ Training graph embeddings
 ############################################################
     """)
 
-    trained_embeddings_dir = Path(
-        output_dir) / CONFIG['EMBEDDING FILES']['embeddings_dir']
+    # trained_embeddings_dir = Path(
+    #     output_dir) / CONFIG['EMBEDDING FILES']['embeddings_dir']
 
-    # train_graph_embeddings_mp(knowledge_graph,
-    #                           trained_embeddings_dir,
+    # train_graph_embeddings_mp(output_dir,
     #                           learning_rate=0.01,
     #                           batch_size=1024,
     #                           epochs=300,
-    #                           embedding_size=300,
+    #                           embedding_size=80,
     #                           n_layers=2,
     #                           negative_samples=128,
     #                           patience=10,
-    #                           num_gpus=4,
+    #                           num_gpus=2,
     #                           regularizer='basis',
     #                           basis=6,
     #                           dropout=0.0)
@@ -88,7 +86,7 @@ Calculating embedding distances and probabilities
 ############################################################
     """)
 
-    save_embedding_distances_and_probs(output_dir)
+    # save_embedding_distances_and_probs(output_dir)
 
     # Train Adverse Event prediction model
     print("""
@@ -97,14 +95,7 @@ Train adverse event prediction model
 ############################################################
     """)
 
-    node_embeddings_path = trained_embeddings_dir / CONFIG['EMBEDDING FILES'][
-        'node_embeddings_file']
-    ae_prediction_model_path = Path(
-        output_dir) / CONFIG['MODEL FILES']['model_dir']
-    train_adverse_event_models(ae_concepts,
-                               knowledge_graph_path,
-                               ae_prediction_model_path,
-                               node_embeddings_path,
+    train_adverse_event_models(output_dir,
                                epochs=100,
                                batch_size=256,
                                learning_rate=0.001,
@@ -152,9 +143,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description="Train a ML pipeline for adverse drug event predictions")
 
-    parser.add_argument('output_dir',
-                        '-o',
-                        help='Output path for pipeline run.')
+    parser.add_argument('output_dir', help='Output path for pipeline run.')
     args = parser.parse_args()
 
     main(args.output_dir)

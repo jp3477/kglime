@@ -36,11 +36,6 @@ PATIENT_SEQUENCES_CSV = PROJECT_PATH / 'run_output/adverse_event_prediction_mode
 # JOINT_ADE_MODEL_PATH = PROJECT_PATH / 'run_output/adverse_event_prediction_model/saved_model/calibrated_model'
 JOINT_ADE_MODEL_PATH = PROJECT_PATH / 'run_output/adverse_event_prediction_model/'
 
-KNOWLEDGE_GRAPH_PATH = PROJECT_PATH / 'run_output/knowledge_graph.pkl'
-EMBEDDINGS_DISTANCES_PATH = PROJECT_PATH / 'run_output/adverse_event_prediction_model/dense_dists_mat.npy'
-EMBEDDINGS_PROBS_PATH = PROJECT_PATH / 'run_output/adverse_event_prediction_model/dense_probs_mat.npy'
-REL_KEY_PATH = PROJECT_PATH / 'run_output/rel_key.json'
-
 RISK_SCORE_MODELS = {}
 
 
@@ -198,15 +193,15 @@ def get_predictions(drug_era_id):
 @app.route("/ade_explanation/<drug_era_id>/<ae_name>")
 def get_explanation(drug_era_id, ae_name):
     drug_era_id = int(drug_era_id)
-    patient_sequence = pd.read_csv(PATIENT_SEQUENCES_CSV,
-                                   parse_dates=['concept_date'])
-    patient_sequence = patient_sequence[patient_sequence['drug_era_id'] ==
-                                        drug_era_id]
+    patient_sequence_df = pd.read_csv(PATIENT_SEQUENCES_CSV,
+                                      parse_dates=['concept_date'])
+    # patient_sequence = patient_sequence[patient_sequence['drug_era_id'] ==
+    #                                     drug_era_id]
 
-    explanation = explain_patient_sequence(RISK_SCORE_MODELS, patient_sequence,
-                                           KNOWLEDGE_GRAPH,
-                                           EMBEDDINGS_DISTANCES,
-                                           EMBEDDINGS_PROBS, REL_KEY, ae_name)
+    ae_model = RISK_SCORE_MODELS[ae_name]
+
+    explanation = explain_patient_sequence(ae_model, patient_sequence_df,
+                                           'run_output')
 
     return jsonify(explanation)
 
@@ -216,7 +211,7 @@ if __name__ == '__main__':
     print("Diving into multiprocessing")
     model_dirs = [
         p for p in list(Path(JOINT_ADE_MODEL_PATH).iterdir())
-        if p.is_dir() and p.stem in ['Leukopenia', 'Pain', 'Nausea']
+        if p.is_dir() and p.stem in ['Pain', 'Nausea']
         # and p.stem in [
         #     'Nausea', 'Infection', 'Hypertension', 'Headache', 'Rash',
         #     'Pyrexia', 'Diarrhoea', 'Arthralgia', 'Back pain',
@@ -239,20 +234,5 @@ if __name__ == '__main__':
         }):
             risk_models_list = pool.map(load_model, model_dirs)
         RISK_SCORE_MODELS = dict(risk_models_list)
-
-    app.logger.info("Loading knowledge graph")
-    print("Loading knowledge graph")
-    KNOWLEDGE_GRAPH = nx.read_gpickle(KNOWLEDGE_GRAPH_PATH)
-
-    app.logger.info("Loading embedding distances")
-    print("Loading embedding distances")
-    with open(EMBEDDINGS_DISTANCES_PATH, 'rb') as f:
-        EMBEDDINGS_DISTANCES = np.load(f)
-
-    with open(EMBEDDINGS_PROBS_PATH, 'rb') as f:
-        EMBEDDINGS_PROBS = np.load(f)
-
-    with open(REL_KEY_PATH, 'r') as f:
-        REL_KEY = json.load(f)
 
     app.run(debug=False)
