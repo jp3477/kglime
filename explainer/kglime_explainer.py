@@ -974,8 +974,8 @@ class KGLIMEExplainer(LimeVectorizedExplainer):
         # rel = np.random.randint(0, self.num_rels)
 
         values = self.index_to_key
-        probs = self.dense_probs_mat[-1, i, :]
-        dists = self.dense_dists_mat[-1, i, :]
+        probs = self.dense_probs_mat[8, i, :]
+        dists = self.dense_dists_mat[8, i, :]
 
         return values, dists, probs
 

@@ -35,9 +35,12 @@ def kglime_explain(patient_sequence,
                    index_date,
                    sequence_length,
                    num_samples=10000,
-                   num_features=10):
+                   num_features=10,
+                   index_to_key=None):
 
-    index_to_key = np.array(sorted(list(knowledge_graph.nodes)))
+    if not index_to_key:
+        index_to_key = np.array(sorted(list(knowledge_graph.nodes)))
+
     key_to_index = dict(zip(index_to_key, range(len(index_to_key))))
 
     categorical_names = {}
@@ -304,7 +307,10 @@ def kglime_explain_old(patient_sequence,
 #     return explanations
 
 
-def explain_patient_sequence(ade_model, patient_sequence_df, output_dir):
+def explain_patient_sequence(ade_model,
+                             patient_sequence_df,
+                             output_dir,
+                             use_custom_index=True):
     import json
 
     knowledge_graph_path = Path(
@@ -322,6 +328,13 @@ def explain_patient_sequence(ade_model, patient_sequence_df, output_dir):
     dense_probs_mat = np.load(dense_probs_mat_file)
     with open(rel_key_file, 'r') as f:
         rel_key = json.load(f)
+
+    index_to_key = None
+    if use_custom_index:
+        INDEX_TO_KEY_FILE = Path(output_dir) / Path(
+            CONFIG['EMBEDDING FILES']['index_to_key_file'])
+        with open(INDEX_TO_KEY_FILE, 'r') as f:
+            index_to_key = json.load(f)
 
     # ade_models, patient_sequence_df, knowledge_graph,
     #                              dense_dists_mat, dense_probs_mat, rel_key,
@@ -346,7 +359,8 @@ def explain_patient_sequence(ade_model, patient_sequence_df, output_dir):
                                  index_date,
                                  sequence_length,
                                  num_features=20,
-                                 num_samples=5000)
+                                 num_samples=5000,
+                                 index_to_key=index_to_key)
 
     print('explanation_type, ', explanation)
     explanation = explanation.fillna(0)
